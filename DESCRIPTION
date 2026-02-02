@@ -1,0 +1,36 @@
+Package: vertexR
+Title: Graph Exploration, Simulation, and Optimization for Ontology-Backed System Graphs
+Version: 0.1.0
+Authors@R:
+    person("Cathal", "Byrne", role = c("aut", "cre"),
+           email = "cathal@example.com")
+Description: Turns ontology specifications into interconnected system graphs
+    for exploration, alerting, what-if simulation, and optimization. Built on
+    ontologySpecR bundles and DBI connections, vertexR materializes object
+    instances as nodes and link instances as edges, enabling graph-based
+    analysis of cause-and-effect across any domain.
+License: MIT + file LICENSE
+Depends: R (>= 3.6)
+Imports:
+    ontologySpecR,
+    DBI,
+    igraph,
+    tidygraph,
+    dplyr,
+    rlang
+Suggests:
+    duckdb,
+    visNetwork,
+    ggraph,
+    ggplot2,
+    actionTypesR,
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown
+Config/testthat/edition: 3
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+VignetteBuilder: knitr
+URL: https://github.com/CathalByrneGit/vertexR
+BugReports: https://github.com/CathalByrneGit/vertexR/issues

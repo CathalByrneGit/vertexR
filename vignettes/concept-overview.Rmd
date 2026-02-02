@@ -1,0 +1,333 @@
+---
+title: "vertexR: Turning Your Ontology into a System Graph"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{vertexR: Turning Your Ontology into a System Graph}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## What problem does this solve?
+
+Data in relational tables is disconnected. You can query airports, airlines,
+and routes individually, but the relationships between them -- which airlines
+operate which routes from which airports -- live in join keys that are
+invisible until you write SQL. When something goes wrong (an airport nears
+capacity, a route gets cancelled), understanding the cascade of effects
+requires mentally assembling the graph yourself.
+
+**vertexR turns an ontology specification into an interconnected system
+graph** so you can see cause-and-effect, not just rows. It materializes
+every object instance as a node and every link instance as an edge,
+then provides tools to explore, alert on, simulate, and optimize across
+the whole system.
+
+## Building a system graph
+
+We'll use an aviation domain as a running example. First, set up a bundle
+describing our ontology and populate a DuckDB with sample data.
+
+```{r build-graph}
+library(ontologySpecR)
+library(vertexR)
+library(dplyr, warn.conflicts = FALSE)
+
+# -- Define the ontology bundle --
+b <- bundle(
+ bundle_id = "aviation-demo",
+  bundle_version = "0.1.0",
+  objects = list(
+    object_type(
+      id = "Airport",
+      properties = list(
+        property_def("airport_id", "string", nullable = FALSE),
+        property_def("name", "string"),
+        property_def("country", "string"),
+        property_def("capacity", "integer"),
+        property_def("utilization", "number"),
+        property_def("latitude", "number"),
+        property_def("longitude", "number")
+      ),
+      primary_key = "airport_id",
+      source_kind = "table",
+      source_table = "airports"
+    ),
+    object_type(
+      id = "Airline",
+      properties = list(
+        property_def("airline_id", "string", nullable = FALSE),
+        property_def("name", "string"),
+        property_def("country", "string"),
+        property_def("active", "boolean")
+      ),
+      primary_key = "airline_id",
+      source_kind = "table",
+      source_table = "airlines"
+    ),
+    object_type(
+      id = "FlightRoute",
+      properties = list(
+        property_def("route_id", "string", nullable = FALSE),
+        property_def("origin_id", "string"),
+        property_def("destination_id", "string"),
+        property_def("airline_id", "string"),
+        property_def("stops", "integer"),
+        property_def("equipment", "string")
+      ),
+      primary_key = "route_id",
+      source_kind = "table",
+      source_table = "routes"
+    )
+  ),
+  links = list(
+    link_type(
+      id = "RouteOrigin",
+      from = "FlightRoute", to = "Airport",
+      cardinality = "many-to-one", directed = TRUE,
+      join_from_keys = "origin_id", join_to_keys = "airport_id"
+    ),
+    link_type(
+      id = "RouteDestination",
+      from = "FlightRoute", to = "Airport",
+      cardinality = "many-to-one", directed = TRUE,
+      join_from_keys = "destination_id", join_to_keys = "airport_id"
+    ),
+    link_type(
+      id = "RouteOperator",
+      from = "FlightRoute", to = "Airline",
+      cardinality = "many-to-one", directed = TRUE,
+      join_from_keys = "airline_id", join_to_keys = "airline_id"
+    )
+  )
+)
+
+# -- Populate a DuckDB with sample data --
+con <- DBI::dbConnect(duckdb::duckdb())
+
+DBI::dbWriteTable(con, "airports", data.frame(
+  airport_id  = c("DUB", "JFK", "LHR", "CDG"),
+  name        = c("Dublin", "JFK", "Heathrow", "Charles de Gaulle"),
+  country     = c("Ireland", "USA", "UK", "France"),
+  capacity    = c(30L, 100L, 80L, 70L),
+  utilization = c(0.95, 0.6, 0.85, 0.5),
+  latitude    = c(53.42, 40.64, 51.47, 49.01),
+  longitude   = c(-6.27, -73.78, -0.46, 2.55),
+  stringsAsFactors = FALSE
+))
+DBI::dbWriteTable(con, "airlines", data.frame(
+  airline_id = c("EI", "AA", "BA"),
+  name       = c("Aer Lingus", "American Airlines", "British Airways"),
+  country    = c("Ireland", "USA", "UK"),
+  active     = c(TRUE, TRUE, TRUE),
+  stringsAsFactors = FALSE
+))
+DBI::dbWriteTable(con, "routes", data.frame(
+  route_id       = c("R1", "R2", "R3", "R4", "R5"),
+  origin_id      = c("DUB", "JFK", "LHR", "DUB", "CDG"),
+  destination_id = c("JFK", "DUB", "JFK", "LHR", "LHR"),
+  airline_id     = c("EI", "EI", "BA", "EI", "BA"),
+  stops          = c(0L, 0L, 0L, 0L, 1L),
+  equipment      = c("A330", "A330", "777", "A320", "A320"),
+  stringsAsFactors = FALSE
+))
+
+# -- Build the system graph --
+g <- vertex_graph(b, con)
+g
+```
+
+One call turns three database tables and three link definitions into a
+unified graph. Each node carries its `.object_type` and `.node_id`, plus
+all property columns from the source table.
+
+## Exploring the graph
+
+### Node and edge accessors
+
+```{r explore-nodes}
+vx_nodes(g)
+```
+
+```{r explore-edges}
+vx_edges(g)
+```
+
+### Subgraph by object type
+
+Pull out just the airports:
+
+```{r subgraph}
+airport_graph <- vx_subgraph(g, "Airport")
+vx_nodes(airport_graph)
+```
+
+### Search-around (neighbors)
+
+Starting from Dublin, find everything within 1 hop:
+
+```{r neighbors}
+dub_nbrs <- vx_neighbors(g, "DUB", depth = 1)
+vx_nodes(dub_nbrs)
+```
+
+At depth 2, we reach further:
+
+```{r neighbors-2}
+dub_nbrs2 <- vx_neighbors(g, "DUB", depth = 2)
+vx_nodes(dub_nbrs2)
+```
+
+### Shortest path
+
+Find the path between Dublin and JFK:
+
+```{r shortest-path}
+vx_shortest_path(g, "DUB", "JFK")
+```
+
+## Setting up alerts
+
+Alerts let you define conditions on the graph and evaluate them
+programmatically. Each rule is a function that receives the graph and
+returns the `.node_id` values of flagged nodes.
+
+```{r alerts}
+rule <- vx_alert_rule(
+  id = "over_capacity",
+  description = "Airports over 90% utilization",
+  condition = function(g) {
+    nodes <- vx_nodes(g)
+    airports <- nodes[nodes$.object_type == "Airport", ]
+    airports[airports$utilization > 0.9, ]$.node_id
+  },
+  severity = "critical"
+)
+
+alerts <- vx_evaluate_alerts(g, list(rule))
+alerts
+```
+
+Dublin (DUB) is flagged -- it's at 95% utilization.
+
+### Propagating risk
+
+Which nodes are downstream of Dublin? If DUB has a problem, which routes
+and connected airports are affected?
+
+```{r propagate}
+vx_propagate_risk(g, "DUB", depth = 2)
+```
+
+## What-if scenarios
+
+Scenarios let you modify the graph and see what happens without touching
+the database. What if Dublin airport closes?
+
+```{r scenario}
+scenario <- vx_scenario(g) |>
+  vx_remove_node("DUB")
+
+g_closed <- vx_apply_scenario(scenario)
+g_closed
+```
+
+### Comparing original vs. scenario
+
+```{r compare}
+diff <- vx_compare(g, g_closed)
+diff
+```
+
+The comparison shows that DUB was removed along with its incident edges --
+the three routes that originated from or went to Dublin.
+
+You can also modify properties:
+
+```{r scenario-modify}
+scenario2 <- vx_scenario(g) |>
+  vx_modify_node("DUB", capacity = 50L, utilization = 0.6)
+
+g2 <- vx_apply_scenario(scenario2)
+vx_compare(g, g2)
+```
+
+Now DUB's capacity has increased and utilization has dropped -- we can
+re-evaluate alerts on the modified graph:
+
+```{r scenario-alerts}
+vx_evaluate_alerts(g2, list(rule))
+```
+
+No alerts -- the scenario resolved the over-capacity issue.
+
+## Visualization
+
+vertexR provides interactive graph visualization via visNetwork (with a
+ggraph fallback for static plots).
+
+```{r plot, eval = requireNamespace("visNetwork", quietly = TRUE)}
+vx_plot(g,
+  color_by = ".object_type",
+  size_by = "capacity",
+  highlight = "DUB",
+  label_by = ".node_id"
+)
+```
+
+You can also visualize scenario diffs:
+
+```{r plot-scenario, eval = requireNamespace("visNetwork", quietly = TRUE)}
+scenario_viz <- vx_scenario(g) |>
+  vx_remove_node("DUB")
+vx_plot_scenario(g, scenario_viz)
+```
+
+## How it fits the ecosystem
+
+```
+                     +-------------------+
+                     |   Your R session  |
+                     +-------------------+
+                              |
+                     +--------v--------+
+                     |     vertexR     |
+                     | (graph, alerts, |
+                     |  scenarios, opt)|
+                     +--------+--------+
+                              |
+              +---------------+---------------+
+              |                               |
+    +---------v---------+          +----------v----------+
+    |   ontologySpecR   |          |        DBI          |
+    | (bundle, object   |          |  (DuckDB, Postgres, |
+    |  types, links)    |          |   SQLite, ...)      |
+    +-------------------+          +---------------------+
+              |
+    +---------v---------+          +---------------------+
+    |   objectSetsR     |          |    actionTypesR     |
+    | (lazy queries,    |  <---->  | (execute actions    |
+    |  optional)        |          |  from scenarios)    |
+    +-------------------+          +---------------------+
+```
+
+- **ontologySpecR** provides the type definitions (bundle, object types,
+  link types). vertexR reads these to know which tables to query and how
+  to join them.
+- **DBI** is the database abstraction. vertexR works with any DBI backend --
+  DuckDB for local analytics, PostgreSQL for production, etc.
+- **objectSetsR** is an optional companion for lazy object set queries.
+  vertexR builds its own graph construction to avoid known issues in
+  objectSetsR's primary key handling.
+- **actionTypesR** is an optional companion. After a simulation identifies
+  a needed intervention, you could execute it as an action via actionTypesR.
+
+```{r cleanup, include = FALSE}
+DBI::dbDisconnect(con, shutdown = TRUE)
+```
