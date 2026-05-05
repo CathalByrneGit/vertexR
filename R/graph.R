@@ -15,6 +15,9 @@
 #' @param node_properties Logical; if `TRUE` (default), include all property
 #'   columns from the source table on each node. If `FALSE`, only include
 #'   `.object_type` and `.node_id`.
+#' @param max_nodes Integer; maximum total nodes allowed. If the total would
+#'   exceed this limit, an error is raised. Set to `Inf` to disable the guard.
+#'   Default is 50000.
 #'
 #' @return A `tbl_graph` object.
 #' @export
@@ -31,7 +34,8 @@
 vertex_graph <- function(bundle, connection,
                          object_types = NULL,
                          link_types = NULL,
-                         node_properties = TRUE) {
+                         node_properties = TRUE,
+                         max_nodes = 50000L) {
 
   # Validate inputs
   if (!inherits(connection, "DBIConnection")) {
@@ -56,20 +60,41 @@ vertex_graph <- function(bundle, connection,
   }
 
   # Also filter links to only those whose from/to reference included objects
-
   included_obj_ids <- vapply(all_objects, function(o) o$id, character(1))
   all_links <- Filter(function(l) {
     l$from %in% included_obj_ids && l$to %in% included_obj_ids
   }, all_links)
 
+  # --- Check max_nodes guard (count lazily before loading) ---
+  if (is.finite(max_nodes)) {
+    total_count <- 0L
+    for (obj in all_objects) {
+      tbl_name <- get_source_table(obj)
+      total_count <- total_count + count_table_rows(connection, tbl_name)
+    }
+    if (total_count > max_nodes) {
+      abort(paste0(
+        "Total node count (", total_count, ") exceeds max_nodes limit (",
+        max_nodes, "). Consider filtering object_types or using objectSetsR ",
+        "for large-scale queries. Set max_nodes = Inf to disable this guard."
+      ))
+    }
+  }
+
   # --- Build node table ---
   node_frames <- list()
   for (obj in all_objects) {
     tbl_name <- get_source_table(obj)
-    df <- read_table(connection, tbl_name)
+    pk_cols <- get_pk_columns(obj)
+
+    # Determine which columns to fetch (lazy column selection)
+    if (node_properties) {
+      df <- read_table(connection, tbl_name, columns = NULL)
+    } else {
+      df <- read_table(connection, tbl_name, columns = pk_cols)
+    }
     if (is.null(df) || nrow(df) == 0L) next
 
-    pk_cols <- get_pk_columns(obj)
     node_id <- make_node_ids(df, pk_cols)
 
     if (node_properties) {
@@ -110,12 +135,16 @@ vertex_graph <- function(bundle, connection,
     from_table <- get_source_table(from_obj)
     to_table   <- get_source_table(to_obj)
 
-    from_df <- read_table(connection, from_table)
-    to_df   <- read_table(connection, to_table)
-    if (is.null(from_df) || is.null(to_df)) next
-
     from_pk <- get_pk_columns(from_obj)
     to_pk   <- get_pk_columns(to_obj)
+
+    # Only fetch PK + join key columns for edge building (lazy column selection)
+    from_cols <- unique(c(from_pk, from_keys))
+    to_cols   <- unique(c(to_pk, to_keys))
+
+    from_df <- read_table(connection, from_table, columns = from_cols)
+    to_df   <- read_table(connection, to_table, columns = to_cols)
+    if (is.null(from_df) || is.null(to_df)) next
 
     # For each row in the "from" table, the from_keys columns contain
     # the values that match the to_keys columns in the "to" table.

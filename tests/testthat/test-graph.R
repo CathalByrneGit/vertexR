@@ -256,3 +256,36 @@ test_that("vertex_graph errors on invalid connection", {
   expect_error(vertex_graph(b, "not_a_connection"),
                "must be a DBI connection")
 })
+
+
+test_that("vertex_graph enforces max_nodes limit", {
+  env <- setup_aviation()
+  on.exit(teardown_aviation(env))
+
+  # Our test data has 12 nodes total (4 airports + 3 airlines + 5 routes)
+  # Setting max_nodes = 10 should trigger the guard
+  expect_error(
+    vertex_graph(env$bundle, env$con, max_nodes = 10L),
+    "exceeds max_nodes"
+  )
+})
+
+
+test_that("vertex_graph succeeds when within max_nodes limit", {
+  env <- setup_aviation()
+  on.exit(teardown_aviation(env))
+
+  # max_nodes = 100 should be plenty
+  g <- vertex_graph(env$bundle, env$con, max_nodes = 100L)
+  expect_s3_class(g, "tbl_graph")
+  expect_equal(nrow(vx_nodes(g)), 12L)
+})
+
+
+test_that("vertex_graph max_nodes can be disabled with Inf", {
+  env <- setup_aviation()
+  on.exit(teardown_aviation(env))
+
+  g <- vertex_graph(env$bundle, env$con, max_nodes = Inf)
+  expect_s3_class(g, "tbl_graph")
+})

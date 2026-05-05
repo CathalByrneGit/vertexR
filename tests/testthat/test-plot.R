@@ -171,3 +171,41 @@ test_that("vx_plot_scenario returns a visualization", {
   p <- vx_plot_scenario(g, s)
   expect_s3_class(p, "visNetwork")
 })
+
+
+test_that("vx_color_by_concept adds concept columns to graph", {
+  env <- setup_aviation()
+  on.exit(teardown_aviation(env))
+
+  g <- vertex_graph(env$bundle, env$con)
+
+  # Create mock concept results
+  concept_results <- data.frame(
+    .node_id = c("DUB", "JFK", "LHR", "CDG"),
+    busy_airport = c(TRUE, FALSE, TRUE, FALSE),
+    stringsAsFactors = FALSE
+  )
+
+  g2 <- vx_color_by_concept(g, concept_results)
+  nodes <- vx_nodes(g2)
+
+  expect_true("busy_airport" %in% names(nodes))
+  dub <- nodes[nodes$.node_id == "DUB", ]
+  expect_true(dub$busy_airport)
+})
+
+
+test_that("vx_color_by_concept requires .node_id column", {
+  env <- setup_aviation()
+  on.exit(teardown_aviation(env))
+
+  g <- vertex_graph(env$bundle, env$con)
+
+  bad_results <- data.frame(
+    node_id = c("DUB"),  # wrong column name
+    busy = c(TRUE),
+    stringsAsFactors = FALSE
+  )
+
+  expect_error(vx_color_by_concept(g, bad_results), "\\.node_id")
+})

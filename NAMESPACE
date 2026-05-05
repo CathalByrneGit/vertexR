@@ -9,6 +9,8 @@ export(vx_edges)
 export(vx_subgraph)
 export(vx_neighbors)
 export(vx_shortest_path)
+export(vx_connected_components)
+export(vx_cycle_detect)
 
 # Alert rules
 export(vx_alert_rule)
@@ -27,15 +29,18 @@ export(vx_compare)
 # Optimization (experimental)
 export(vx_optimize)
 export(vx_edge_var)
+export(vx_node_var)
 export(vx_node_constraint)
 
 # Visualization
 export(vx_plot)
 export(vx_plot_scenario)
+export(vx_color_by_concept)
 
 # S3 methods
 S3method(print, vx_alert_rule)
 S3method(print, vx_scenario)
+S3method(print, vx_optimize_result)
 
 importFrom(rlang, "%||%")
 importFrom(rlang, abort)
@@ -55,3 +60,8 @@ importFrom(igraph, induced_subgraph)
 importFrom(igraph, delete_vertices)
 importFrom(igraph, make_ego_graph)
 importFrom(igraph, distances)
+importFrom(igraph, components)
+importFrom(igraph, is_dag)
+importFrom(dplyr, tbl)
+importFrom(dplyr, collect)
+importFrom(dplyr, all_of)
