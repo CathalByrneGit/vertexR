@@ -192,6 +192,25 @@ Find the path between Dublin and JFK:
 vx_shortest_path(g, "DUB", "JFK")
 ```
 
+### Connected components
+
+Identify which parts of the graph are connected:
+
+```{r components}
+vx_connected_components(g, mode = "weak")
+```
+
+### Cycle detection
+
+Check if the graph contains directed cycles (useful for validation):
+
+```{r cycles}
+vx_cycle_detect(g)
+```
+
+Our aviation graph is a DAG (routes point to airports/airlines but not
+vice versa), so this returns `FALSE`.
+
 ## Setting up alerts
 
 Alerts let you define conditions on the graph and evaluate them
@@ -289,6 +308,38 @@ scenario_viz <- vx_scenario(g) |>
 vx_plot_scenario(g, scenario_viz)
 ```
 
+### Concept integration
+
+If you use `conceptR` to evaluate concepts on your objects, you can join
+those results onto the graph for visualization:
+```{r concept-viz, eval = FALSE}
+# concept_results from conceptR::cpt_evaluate()
+concept_results <- data.frame(
+  .node_id = c("DUB", "JFK", "LHR", "CDG"),
+  busy_airport = c(TRUE, FALSE, TRUE, FALSE)
+)
+
+g_concepts <- vx_color_by_concept(g, concept_results)
+vx_plot(g_concepts, color_by = "busy_airport")
+```
+
+## Memory management
+
+By default, `vertex_graph()` guards against loading excessively large graphs
+into memory. The `max_nodes` parameter (default 50,000) will abort with a
+clear message if the total node count exceeds the limit:
+
+```{r max-nodes, eval = FALSE}
+# This would fail if the database had > 50k total rows:
+g <- vertex_graph(b, con, max_nodes = 50000L)
+
+# Disable the guard for very large graphs (use with caution):
+g <- vertex_graph(b, con, max_nodes = Inf)
+```
+
+For large-scale queries, consider using `objectSetsR` for lazy evaluation
+before materializing a smaller subgraph with vertexR.
+
 ## How it fits the ecosystem
 
 ```
@@ -327,6 +378,8 @@ vx_plot_scenario(g, scenario_viz)
   objectSetsR's primary key handling.
 - **actionTypesR** is an optional companion. After a simulation identifies
   a needed intervention, you could execute it as an action via actionTypesR.
+- **conceptR** is an optional companion for concept evaluation. Use
+  `vx_color_by_concept()` to visualize concept membership on the graph.
 
 ```{r cleanup, include = FALSE}
 DBI::dbDisconnect(con, shutdown = TRUE)

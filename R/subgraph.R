@@ -88,3 +88,48 @@ vx_shortest_path <- function(g, from_id, to_id) {
   path_indices <- as.integer(path_verts)
   nodes[path_indices, , drop = FALSE]
 }
+
+
+#' Find Connected Components
+#'
+#' Identifies the connected components of a graph and returns a data frame
+#' mapping each node to its component ID.
+#'
+#' @param g A `tbl_graph` produced by [vertex_graph()].
+#' @param mode Character; `"weak"` (default) for weakly connected components
+#'   (ignores edge direction) or `"strong"` for strongly connected components.
+#'
+#' @return A tibble with columns `.node_id` and `.component_id`.
+#' @export
+vx_connected_components <- function(g, mode = c("weak", "strong")) {
+  if (!inherits(g, "tbl_graph")) {
+    abort("`g` must be a tbl_graph object.")
+  }
+  mode <- match.arg(mode)
+  nodes <- vx_nodes(g)
+  ig <- igraph::as.igraph(g)
+
+  comps <- igraph::components(ig, mode = mode)
+  dplyr::tibble(
+    .node_id = nodes$.node_id,
+    .component_id = as.integer(comps$membership)
+  )
+}
+
+
+#' Detect Cycles in a Graph
+#'
+#' Checks whether the graph contains any directed cycles.
+#'
+#' @param g A `tbl_graph` produced by [vertex_graph()].
+#'
+#' @return Logical; `TRUE` if the graph contains at least one directed cycle,
+#'   `FALSE` if the graph is a DAG (directed acyclic graph).
+#' @export
+vx_cycle_detect <- function(g) {
+  if (!inherits(g, "tbl_graph")) {
+    abort("`g` must be a tbl_graph object.")
+  }
+  ig <- igraph::as.igraph(g)
+  !igraph::is_dag(ig)
+}

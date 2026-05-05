@@ -199,3 +199,44 @@ vx_plot_scenario <- function(g_original, scenario, layout = "fr") {
           highlight = c(removed_ids, modified_ids),
           layout = layout)
 }
+
+
+#' Add Concept Results to Graph Nodes
+#'
+#' Joins concept evaluation results onto graph nodes, enabling visualization
+#' of concept truth values via `vx_plot(g, color_by = "<concept_name>")`.
+#'
+#' This is the integration point with `conceptR` — concept evaluations can be
+#' visualized as graph node colours.
+#'
+#' @param g A `tbl_graph` produced by [vertex_graph()].
+#' @param concept_results A data frame with columns `.node_id` and one or more
+#'   concept columns (logical/boolean values indicating concept membership).
+#'
+#' @return A modified `tbl_graph` with concept columns added to nodes.
+#' @export
+vx_color_by_concept <- function(g, concept_results) {
+  if (!inherits(g, "tbl_graph")) {
+    abort("`g` must be a tbl_graph object.")
+  }
+  if (!is.data.frame(concept_results)) {
+    abort("`concept_results` must be a data frame.")
+  }
+  if (!".node_id" %in% names(concept_results)) {
+    abort("`concept_results` must have a `.node_id` column.")
+  }
+
+  nodes <- vx_nodes(g)
+  edges <- vx_edges(g)
+
+  # Join concept results onto nodes
+  concept_cols <- setdiff(names(concept_results), ".node_id")
+  if (length(concept_cols) == 0L) {
+    warn("No concept columns found in concept_results (only .node_id present).")
+    return(g)
+  }
+
+  nodes <- dplyr::left_join(nodes, concept_results, by = ".node_id")
+
+  tidygraph::tbl_graph(nodes = nodes, edges = edges, directed = TRUE)
+}

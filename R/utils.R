@@ -52,24 +52,54 @@ get_source_table <- function(obj) {
   src$table
 }
 
-#' Read all rows from a table via DBI
+#' Read selected columns from a table via DBI lazily
+#'
+#' Uses dplyr::tbl() for lazy construction and only collects the requested
+#' columns to reduce memory usage for large tables.
 #'
 #' @param con A DBI connection
 #' @param table_name Character table name
-#' @return A data.frame
+#' @param columns Character vector of columns to select, or NULL for all
+#' @return A data.frame or NULL if table doesn't exist
 #' @keywords internal
-read_table <- function(con, table_name) {
+read_table <- function(con, table_name, columns = NULL) {
+
   if (!DBI::dbExistsTable(con, table_name)) {
     warn(paste0("Table '", table_name, "' does not exist in the database. ",
                 "Skipping."))
     return(NULL)
   }
-  DBI::dbReadTable(con, table_name)
+  tbl_lazy <- dplyr::tbl(con, table_name)
+  if (!is.null(columns)) {
+    existing_cols <- colnames(tbl_lazy)
+    cols_to_select <- intersect(columns, existing_cols)
+    if (length(cols_to_select) > 0L) {
+      tbl_lazy <- dplyr::select(tbl_lazy, dplyr::all_of(cols_to_select))
+    }
+  }
+  dplyr::collect(tbl_lazy)
+}
+
+#' Count rows in a table lazily
+#'
+#' @param con A DBI connection
+#' @param table_name Character table name
+#' @return Integer row count, or 0 if table doesn't exist
+#' @keywords internal
+count_table_rows <- function(con, table_name) {
+  if (!DBI::dbExistsTable(con, table_name)) {
+    return(0L)
+  }
+  result <- DBI::dbGetQuery(con, paste0("SELECT COUNT(*) AS n FROM ",
+                                         DBI::dbQuoteIdentifier(con, table_name)))
+  as.integer(result$n[1])
 }
 
 #' Build a composite node ID from primary key columns
 #'
-#' When a primary key has multiple columns, paste them together with ":".
+#' When a primary key has multiple columns, paste them together with a null
+#' separator (\\x00) which cannot appear in standard identifiers, avoiding
+#' collisions when PK values contain colons.
 #'
 #' @param df A data.frame of rows
 #' @param pk_cols Character vector of column names
@@ -80,7 +110,7 @@ make_node_ids <- function(df, pk_cols) {
     as.character(df[[pk_cols]])
   } else {
     do.call(paste, c(lapply(pk_cols, function(col) as.character(df[[col]])),
-                     list(sep = ":")))
+                     list(sep = "\x00")))
   }
 }
 

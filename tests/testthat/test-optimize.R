@@ -1,6 +1,5 @@
-# Tests for subgraph operations: vx_subgraph(), vx_neighbors(), vx_shortest_path()
+# Tests for optimization: vx_optimize(), vx_edge_var(), vx_node_var()
 
-# Reuse the aviation setup helper from test-graph.R
 setup_aviation <- function() {
   skip_if_not_installed("duckdb")
   skip_if_not_installed("ontologySpecR")
@@ -119,156 +118,152 @@ teardown_aviation <- function(env) {
 }
 
 
-test_that("vx_subgraph filters to a single object type", {
-  env <- setup_aviation()
-  on.exit(teardown_aviation(env))
-
-  g <- vertex_graph(env$bundle, env$con)
-  sub <- vx_subgraph(g, "Airport")
-  sub_nodes <- vx_nodes(sub)
-
-  expect_equal(nrow(sub_nodes), 4L)
-  expect_true(all(sub_nodes$.object_type == "Airport"))
+test_that("vx_edge_var creates valid variable spec", {
+  v <- vx_edge_var("active", type = "binary")
+  expect_s3_class(v, "vx_edge_var")
+  expect_equal(v$name, "active")
+  expect_equal(v$type, "binary")
+  expect_equal(v$lower, 0)
+  expect_equal(v$upper, 1)
 })
 
 
-test_that("vx_subgraph with no matching type gives warning", {
+test_that("vx_node_var creates valid variable spec", {
+  v <- vx_node_var("selected", type = "binary")
+  expect_s3_class(v, "vx_node_var")
+  expect_equal(v$name, "selected")
+  expect_equal(v$type, "binary")
+})
+
+
+test_that("vx_node_constraint creates valid constraint", {
+  con <- vx_node_constraint("Airport", function(node, edges) TRUE)
+  expect_s3_class(con, "vx_node_constraint")
+  expect_equal(con$object_type, "Airport")
+  expect_true(is.function(con$constraint_fn))
+})
+
+
+test_that("vx_optimize returns valid result structure", {
   env <- setup_aviation()
   on.exit(teardown_aviation(env))
 
   g <- vertex_graph(env$bundle, env$con)
-  expect_warning(
-    sub <- vx_subgraph(g, "NonExistent"),
-    "No nodes found"
+
+  result <- vx_optimize(
+    graph = g,
+    objective = function(g) nrow(vx_edges(g)),
+    variables = list(vx_edge_var("active", type = "binary")),
+    constraints = list(),
+    solver = "greedy"
   )
+
+  expect_s3_class(result, "vx_optimize_result")
+  expect_true("best_graph" %in% names(result))
+  expect_true("best_objective" %in% names(result))
+  expect_true("iterations" %in% names(result))
+  expect_true("history" %in% names(result))
+  expect_true("status" %in% names(result))
+  expect_true(result$status %in% c("optimal", "feasible", "infeasible"))
 })
 
 
-test_that("vx_neighbors returns nodes within depth 1", {
+test_that("vx_optimize greedy solver improves objective", {
   env <- setup_aviation()
   on.exit(teardown_aviation(env))
 
   g <- vertex_graph(env$bundle, env$con)
-  nbrs <- vx_neighbors(g, "DUB", depth = 1)
-  nbr_nodes <- vx_nodes(nbrs)
+  initial_edges <- nrow(vx_edges(g))
 
-  # DUB itself + direct neighbors (routes R1, R2, R4 connect to DUB)
-  expect_true("DUB" %in% nbr_nodes$.node_id)
-  # Routes that have DUB as origin or destination
-  expect_true(nrow(nbr_nodes) > 1L)
-})
-
-
-test_that("vx_neighbors at depth 2 includes more nodes", {
-  env <- setup_aviation()
-  on.exit(teardown_aviation(env))
-
-  g <- vertex_graph(env$bundle, env$con)
-  nbrs1 <- vx_neighbors(g, "DUB", depth = 1)
-  nbrs2 <- vx_neighbors(g, "DUB", depth = 2)
-
-  expect_gte(nrow(vx_nodes(nbrs2)), nrow(vx_nodes(nbrs1)))
-})
-
-
-test_that("vx_neighbors errors on unknown node", {
-  env <- setup_aviation()
-  on.exit(teardown_aviation(env))
-
-  g <- vertex_graph(env$bundle, env$con)
-  expect_error(
-    vx_neighbors(g, "UNKNOWN"),
-    "not found"
+  result <- vx_optimize(
+    graph = g,
+    objective = function(g) {
+      edges <- vx_edges(g)
+      if (!"active" %in% names(edges)) return(nrow(edges))
+      sum(edges$active, na.rm = TRUE)
+    },
+    variables = list(vx_edge_var("active", type = "binary")),
+    constraints = list(),
+    solver = "greedy"
   )
+
+  # With no constraints, minimizing should turn all edges off
+  expect_lte(result$best_objective, initial_edges)
 })
 
 
-test_that("vx_shortest_path finds a path between connected nodes", {
+test_that("vx_optimize respects constraints", {
   env <- setup_aviation()
   on.exit(teardown_aviation(env))
 
   g <- vertex_graph(env$bundle, env$con)
-  path <- vx_shortest_path(g, "DUB", "JFK")
 
-  expect_true(nrow(path) >= 2L)
-  expect_equal(path$.node_id[1], "DUB")
-  expect_equal(path$.node_id[nrow(path)], "JFK")
+  # Constraint: each Airport must have at least 1 incident edge active
+  con <- vx_node_constraint("Airport", function(node, edges) {
+    if (nrow(edges) == 0L) return(TRUE)
+    if (!"active" %in% names(edges)) return(TRUE)
+    sum(edges$active, na.rm = TRUE) >= 1L
+  })
+
+  result <- vx_optimize(
+    graph = g,
+    objective = function(g) {
+      edges <- vx_edges(g)
+      if (!"active" %in% names(edges)) return(nrow(edges))
+      sum(edges$active, na.rm = TRUE)
+    },
+    variables = list(vx_edge_var("active", type = "binary")),
+    constraints = list(con),
+    solver = "greedy"
+  )
+
+  expect_true(result$status %in% c("optimal", "feasible"))
 })
 
 
-test_that("vx_shortest_path returns empty for disconnected nodes", {
-  env <- setup_aviation()
-  on.exit(teardown_aviation(env))
-
-  # Build a graph with only airports (no edges between them)
-  g <- vertex_graph(env$bundle, env$con,
-                    object_types = "Airport")
-  path <- vx_shortest_path(g, "DUB", "CDG")|>
-    expect_warning(regexp = "At vendor/cigraph/src/paths/unweighted.c:444 : Couldn't reach some vertices.")
-
-  
-})
-
-
-test_that("vx_shortest_path errors on unknown nodes", {
-  env <- setup_aviation()
-  on.exit(teardown_aviation(env))
-
-  g <- vertex_graph(env$bundle, env$con)
-  expect_error(vx_shortest_path(g, "UNKNOWN", "JFK"), "not found")
-  expect_error(vx_shortest_path(g, "DUB", "UNKNOWN"), "not found")
-})
-
-
-test_that("vx_connected_components identifies components", {
+test_that("vx_optimize maximize option works", {
   env <- setup_aviation()
   on.exit(teardown_aviation(env))
 
   g <- vertex_graph(env$bundle, env$con)
-  comps <- vx_connected_components(g)
 
-  expect_s3_class(comps, "tbl_df")
-  expect_true(".node_id" %in% names(comps))
-  expect_true(".component_id" %in% names(comps))
-  expect_equal(nrow(comps), 12L)  # 4 airports + 3 airlines + 5 routes
+  result <- vx_optimize(
+    graph = g,
+    objective = function(g) {
+      edges <- vx_edges(g)
+      if (!"active" %in% names(edges)) return(nrow(edges))
+      sum(edges$active, na.rm = TRUE)
+    },
+    variables = list(vx_edge_var("active", type = "binary")),
+    constraints = list(),
+    solver = "greedy",
+    maximize = TRUE
+  )
+
+  # When maximizing active edges, all should be 1
+  edges <- vx_edges(result$best_graph)
+  expect_equal(sum(edges$active), nrow(edges))
 })
 
 
-test_that("vx_connected_components with disconnected graph", {
-  env <- setup_aviation()
-  on.exit(teardown_aviation(env))
+test_that("vx_optimize handles empty graph", {
+  skip_if_not_installed("ontologySpecR")
+  skip_if_not_installed("duckdb")
 
-  # Airports only - no edges between them
-  g <- vertex_graph(env$bundle, env$con, object_types = "Airport")
-  comps <- vx_connected_components(g, mode = "weak")
+  # Create empty tbl_graph
+  empty_g <- tidygraph::tbl_graph(
+    nodes = data.frame(.object_type = character(0), .node_id = character(0)),
+    edges = data.frame(from = integer(0), to = integer(0), .link_type = character(0))
+  )
 
-  # Each airport is its own component when there are no edges
-  expect_equal(nrow(comps), 4L)
-  expect_equal(length(unique(comps$.component_id)), 4L)
-})
+  result <- vx_optimize(
+    graph = empty_g,
+    objective = function(g) 0,
+    variables = list(),
+    constraints = list(),
+    solver = "greedy"
+  )
 
-
-test_that("vx_cycle_detect returns FALSE for DAG", {
-  env <- setup_aviation()
-  on.exit(teardown_aviation(env))
-
-  g <- vertex_graph(env$bundle, env$con)
-  # Our aviation graph is a DAG (routes point to airports/airlines)
-  has_cycle <- vx_cycle_detect(g)
-  expect_false(has_cycle)
-})
-
-
-test_that("vx_cycle_detect returns TRUE for cyclic graph", {
-  env <- setup_aviation()
-  on.exit(teardown_aviation(env))
-
-  g <- vertex_graph(env$bundle, env$con)
-  # Add an edge that creates a cycle: airport -> route -> airport
-  s <- vx_scenario(g) |>
-    vx_add_edge("cycle_edge", from = "JFK", to = "R1", .link_type = "Test")
-  g_cyclic <- vx_apply_scenario(s)
-
-  has_cycle <- vx_cycle_detect(g_cyclic)
-  expect_true(has_cycle)
+  expect_equal(result$status, "optimal")
+  expect_equal(result$iterations, 0L)
 })
