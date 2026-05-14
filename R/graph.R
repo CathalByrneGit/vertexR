@@ -6,6 +6,10 @@
 #' and all property columns from the source table, and each edge has
 #' `.link_type` plus the join key columns.
 #'
+#' For large graphs, use `filter_sql` to pre-filter tables before loading,
+#' or use the `vx_pgq_*` functions to query via DuckPGQ without loading
+#' the entire graph into memory.
+#'
 #' @param bundle An ontologySpecR bundle object.
 #' @param connection A DBI connection to the database containing instance data.
 #' @param object_types Character vector of object type IDs to include,
@@ -16,8 +20,12 @@
 #'   columns from the source table on each node. If `FALSE`, only include
 #'   `.object_type` and `.node_id`.
 #' @param max_nodes Integer; maximum total nodes allowed. If the total would
-#'   exceed this limit, an error is raised. Set to `Inf` to disable the guard.
-#'   Default is 50000.
+#'   exceed this limit, a warning is issued (but loading proceeds).
+#'   Set to `Inf` to disable the warning. Default is 50000.
+#' @param filter_sql Named list of per-table WHERE clauses to pre-filter
+#'   before materializing. Names should be table names, values should be
+#'   SQL WHERE predicates (without the WHERE keyword).
+#'   Example: `list(entities = "jurisdiction = 'British Virgin Islands'")`.
 #'
 #' @return A `tbl_graph` object.
 #' @export
@@ -30,12 +38,18 @@
 #' g <- vertex_graph(b, con)
 #' vx_nodes(g)
 #' vx_edges(g)
+#'
+#' # Pre-filter large tables
+#' g <- vertex_graph(b, con,
+#'   filter_sql = list(airports = "country = 'Ireland'")
+#' )
 #' }
 vertex_graph <- function(bundle, connection,
                          object_types = NULL,
                          link_types = NULL,
                          node_properties = TRUE,
-                         max_nodes = 50000L) {
+                         max_nodes = 50000L,
+                         filter_sql = list()) {
 
   # Validate inputs
   if (!inherits(connection, "DBIConnection")) {
@@ -70,13 +84,20 @@ vertex_graph <- function(bundle, connection,
     total_count <- 0L
     for (obj in all_objects) {
       tbl_name <- get_source_table(obj)
-      total_count <- total_count + count_table_rows(connection, tbl_name)
+      # If filter_sql exists for this table, use filtered count
+      if (tbl_name %in% names(filter_sql)) {
+        total_count <- total_count +
+          count_table_rows_filtered(connection, tbl_name, filter_sql[[tbl_name]])
+      } else {
+        total_count <- total_count + count_table_rows(connection, tbl_name)
+      }
     }
     if (total_count > max_nodes) {
-      abort(paste0(
+      warn(paste0(
         "Total node count (", total_count, ") exceeds max_nodes limit (",
-        max_nodes, "). Consider filtering object_types or using objectSetsR ",
-        "for large-scale queries. Set max_nodes = Inf to disable this guard."
+        max_nodes, "). Consider using filter_sql to pre-filter, or use ",
+        "vx_pgq_subgraph() for large-scale queries. ",
+        "Set max_nodes = Inf to disable this warning."
       ))
     }
   }
@@ -87,11 +108,16 @@ vertex_graph <- function(bundle, connection,
     tbl_name <- get_source_table(obj)
     pk_cols <- get_pk_columns(obj)
 
+    # Get filter for this table if any
+    tbl_filter <- filter_sql[[tbl_name]]
+
     # Determine which columns to fetch (lazy column selection)
     if (node_properties) {
-      df <- read_table(connection, tbl_name, columns = NULL)
+      df <- read_table_filtered(connection, tbl_name, columns = NULL,
+                                 where = tbl_filter)
     } else {
-      df <- read_table(connection, tbl_name, columns = pk_cols)
+      df <- read_table_filtered(connection, tbl_name, columns = pk_cols,
+                                 where = tbl_filter)
     }
     if (is.null(df) || nrow(df) == 0L) next
 

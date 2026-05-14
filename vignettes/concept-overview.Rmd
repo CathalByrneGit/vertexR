@@ -338,7 +338,112 @@ g <- vertex_graph(b, con, max_nodes = Inf)
 ```
 
 For large-scale queries, consider using `objectSetsR` for lazy evaluation
-before materializing a smaller subgraph with vertexR.
+before materializing a smaller subgraph with vertexR. Alternatively, use
+the DuckPGQ backend described below.
+
+## DuckPGQ Backend (Large Graphs)
+
+For graphs too large to fit in memory, vertexR provides a complementary
+backend that executes graph queries inside DuckDB using the DuckPGQ extension.
+Instead of materializing nodes and edges in R, queries run as SQL/PGQ
+statements and return only the results you need.
+### When to use which backend
+
+| Backend | Use Case | Memory |
+|---------|----------|--------|
+| `vertex_graph()` + igraph | Small-to-medium graphs, algorithm-heavy work | In-memory |
+| `vx_pgq_*()` + DuckPGQ | Large graphs, traversal queries | In-database |
+
+The recommended pattern: use `vx_pgq_*` for traversal on the full dataset,
+then pull a subgraph into `vertex_graph()` for scenario analysis and
+optimization.
+
+### Setting up DuckPGQ
+
+First, check if DuckPGQ is available:
+
+```{r pgq-setup, eval = FALSE}
+# Check availability
+vx_pgq_available(con)
+
+# Create property graph from bundle
+vx_pgq_setup(b, con)
+graph_name <- vx_pgq_graph_name(b)  # "aviation_demo"
+```
+
+The setup creates a DuckPGQ property graph with vertex tables for each
+object type and edge tables for each link type.
+
+### Querying neighbors
+
+Find what's connected to a node without loading the full graph:
+
+```{r pgq-neighbors, eval = FALSE}
+# Find routes originating from DUB (executes in DuckDB)
+vx_pgq_neighbors(con, graph_name,
+  source_type = "Airport",
+  source_ids = c("DUB"),
+  link_type = "RouteOrigin",
+  target_type = "FlightRoute",
+  depth = 1,
+  direction = "backward"  # routes point TO airports
+)
+```
+
+### Finding shortest paths
+
+```{r pgq-path, eval = FALSE}
+# Find path between two airports
+vx_pgq_shortest_path(con, graph_name,
+  from_type = "Airport", from_id = "DUB",
+  to_type = "Airport", to_id = "JFK",
+  max_hops = 5
+)
+```
+
+### Investigation patterns (ICIJ-style)
+
+vertexR includes pre-built patterns for common investigative queries,
+inspired by the ICIJ's offshore leaks analysis:
+
+```{r pgq-patterns, eval = FALSE}
+# List available patterns
+vx_pgq_list_patterns()
+
+# Find entities sharing a common officer
+vx_pgq_pattern(con, graph_name, "common_officer")
+
+# Find officers spanning multiple jurisdictions
+vx_pgq_pattern(con, graph_name, "multi_jurisdiction_officer",
+  params = list(min_jurisdictions = 3))
+
+# Find intermediaries connecting many entities
+vx_pgq_pattern(con, graph_name, "intermediary_hub",
+  params = list(min_connections = 10))
+```
+
+### Extracting subgraphs for algorithm work
+
+After identifying interesting nodes with DuckPGQ queries, pull them into
+an in-memory graph for detailed analysis:
+
+```{r pgq-subgraph, eval = FALSE}
+# Extract subgraph around specific nodes
+g <- vx_pgq_subgraph(con, b, graph_name,
+  seed_ids = c("DUB", "JFK"),
+  seed_type = "Airport",
+  depth = 2
+)
+
+# Now use in-memory functions
+vx_scenario(g) |>
+  vx_remove_node("DUB") |>
+  vx_apply_scenario()
+```
+
+This two-phase approach lets you work with arbitrarily large graphs:
+DuckPGQ handles the broad traversal, then vertexR's in-memory engine
+handles the detailed what-if analysis.
 
 ## How it fits the ecosystem
 
@@ -353,19 +458,21 @@ before materializing a smaller subgraph with vertexR.
                      |  scenarios, opt)|
                      +--------+--------+
                               |
-              +---------------+---------------+
-              |                               |
-    +---------v---------+          +----------v----------+
-    |   ontologySpecR   |          |        DBI          |
-    | (bundle, object   |          |  (DuckDB, Postgres, |
-    |  types, links)    |          |   SQLite, ...)      |
-    +-------------------+          +---------------------+
-              |
-    +---------v---------+          +---------------------+
-    |   objectSetsR     |          |    actionTypesR     |
-    | (lazy queries,    |  <---->  | (execute actions    |
-    |  optional)        |          |  from scenarios)    |
-    +-------------------+          +---------------------+
+      +-----------+-----------+-----------+
+      |           |                       |
++-----v-----+ +---v---+          +--------v--------+
+| vertex_   | |vx_pgq_|          |       DBI       |
+| graph()   | |  *()  |          | (DuckDB, PG,    |
+| (igraph)  | |(PGQ)  |          |  SQLite, ...)   |
++-----------+ +---+---+          +-----------------+
+                  |                       |
+                  +--------+------+-------+
+                           |      |
+                 +---------v--+ +-v---------+
+                 |ontologySpecR| |  DuckPGQ  |
+                 |(bundle,     | |(optional) |
+                 | types)      | +-----------+
+                 +-------------+
 ```
 
 - **ontologySpecR** provides the type definitions (bundle, object types,
@@ -373,6 +480,9 @@ before materializing a smaller subgraph with vertexR.
   to join them.
 - **DBI** is the database abstraction. vertexR works with any DBI backend --
   DuckDB for local analytics, PostgreSQL for production, etc.
+- **DuckPGQ** is an optional DuckDB extension for graph queries. When
+  installed, vertexR's `vx_pgq_*` functions execute traversals directly
+  in the database without materializing the full graph in R.
 - **objectSetsR** is an optional companion for lazy object set queries.
   vertexR builds its own graph construction to avoid known issues in
   objectSetsR's primary key handling.

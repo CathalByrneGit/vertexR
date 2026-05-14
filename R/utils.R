@@ -171,3 +171,64 @@ find_link_type <- function(bundle, id) {
   }
   NULL
 }
+
+
+#' Read table with optional WHERE filter
+#'
+#' @param con A DBI connection
+#' @param table_name Character table name
+#' @param columns Character vector of columns to select, or NULL for all
+#' @param where Character WHERE clause (without WHERE keyword), or NULL
+#' @return A data.frame or NULL if table doesn't exist
+#' @keywords internal
+read_table_filtered <- function(con, table_name, columns = NULL, where = NULL) {
+  if (!DBI::dbExistsTable(con, table_name)) {
+    warn(paste0("Table '", table_name, "' does not exist in the database. ",
+                "Skipping."))
+    return(NULL)
+  }
+
+  if (is.null(where)) {
+    return(read_table(con, table_name, columns))
+  }
+
+  # Build SQL with WHERE clause
+  tbl_quoted <- DBI::dbQuoteIdentifier(con, table_name)
+  if (is.null(columns)) {
+    cols_sql <- "*"
+  } else {
+    cols_sql <- paste(DBI::dbQuoteIdentifier(con, columns), collapse = ", ")
+  }
+
+  sql <- paste0("SELECT ", cols_sql, " FROM ", tbl_quoted, " WHERE ", where)
+  tryCatch(
+    DBI::dbGetQuery(con, sql),
+    error = function(e) {
+      warn(paste0("Query failed for table '", table_name, "': ",
+                  conditionMessage(e)))
+      NULL
+    }
+  )
+}
+
+
+#' Count rows in a table with optional WHERE filter
+#'
+#' @param con A DBI connection
+#' @param table_name Character table name
+#' @param where Character WHERE clause (without WHERE keyword)
+#' @return Integer row count, or 0 if table doesn't exist or query fails
+#' @keywords internal
+count_table_rows_filtered <- function(con, table_name, where) {
+  if (!DBI::dbExistsTable(con, table_name)) {
+    return(0L)
+  }
+  tbl_quoted <- DBI::dbQuoteIdentifier(con, table_name)
+  sql <- paste0("SELECT COUNT(*) AS n FROM ", tbl_quoted, " WHERE ", where)
+  tryCatch({
+    result <- DBI::dbGetQuery(con, sql)
+    as.integer(result$n[1])
+  }, error = function(e) {
+    0L
+  })
+}

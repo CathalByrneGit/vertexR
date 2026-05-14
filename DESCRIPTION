@@ -8,7 +8,9 @@ Description: Turns ontology specifications into interconnected system graphs
     for exploration, alerting, what-if simulation, and optimization. Built on
     ontologySpecR bundles and DBI connections, vertexR materializes object
     instances as nodes and link instances as edges, enabling graph-based
-    analysis of cause-and-effect across any domain.
+    analysis of cause-and-effect across any domain. For large graphs, provides
+    a DuckPGQ backend that executes graph queries inside DuckDB without
+    materializing into R memory.
 License: MIT + file LICENSE
 Depends: R (>= 3.6)
 Imports:
@@ -24,9 +26,11 @@ Suggests:
     ggraph,
     ggplot2,
     actionTypesR,
+    conceptR,
     testthat (>= 3.0.0),
     knitr,
     rmarkdown
+SystemRequirements: DuckDB >= 1.0 with duckpgq community extension (optional, for vx_pgq_* functions)
 Config/testthat/edition: 3
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

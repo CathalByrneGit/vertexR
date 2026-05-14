@@ -37,6 +37,18 @@ export(vx_plot)
 export(vx_plot_scenario)
 export(vx_color_by_concept)
 
+# DuckPGQ backend (large graphs)
+export(vx_pgq_available)
+export(vx_pgq_setup)
+export(vx_pgq_graph_name)
+export(vx_pgq_match)
+export(vx_pgq_neighbors)
+export(vx_pgq_shortest_path)
+export(vx_pgq_pattern)
+export(vx_pgq_list_patterns)
+export(vx_pgq_subgraph)
+export(vx_pgq_components)
+
 # S3 methods
 S3method(print, vx_alert_rule)
 S3method(print, vx_scenario)
