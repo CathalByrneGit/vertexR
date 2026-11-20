@@ -14,42 +14,22 @@ NULL
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-#' Extract primary key column names from an ontologySpecR object type
-#'
-#' Handles the structured primaryKey (with $properties and $strategy).
+#' Extract primary key column names from an object type
 #'
 #' @param obj An ontologySpecR object_type
 #' @return Character vector of primary key column names
 #' @keywords internal
 get_pk_columns <- function(obj) {
-
-  pk <- obj$primaryKey
-  if (is.null(pk)) {
-    abort(paste0("Object type '", obj$id, "' has no primaryKey defined."))
-  }
-  # primaryKey is an ontology_primary_key_def with $properties (char vector)
-  # and $strategy ("natural" or "surrogate")
-  props <- pk$properties
-  if (is.null(props)) {
-    abort(paste0("Object type '", obj$id,
-                 "' has primaryKey but no $properties field."))
-  }
-  as.character(props)
+  as.character(ontologySpecR::object_pk(obj))
 }
 
-#' Get source table name from an ontologySpecR object type
+#' Get source table name from an object type
 #'
 #' @param obj An ontologySpecR object_type
 #' @return Character string table name
 #' @keywords internal
 get_source_table <- function(obj) {
-  src <- obj$source
-  if (is.null(src) || is.null(src$table)) {
-    abort(paste0("Object type '", obj$id,
-                 "' has no source table defined. ",
-                 "vertexR requires source$table for each object type."))
-  }
-  src$table
+  ontologySpecR::object_table(obj)
 }
 
 #' Read selected columns from a table via DBI lazily
@@ -58,18 +38,18 @@ get_source_table <- function(obj) {
 #' columns to reduce memory usage for large tables.
 #'
 #' @param con A DBI connection
-#' @param table_name Character table name
+#' @param tbl_nm Character table name
 #' @param columns Character vector of columns to select, or NULL for all
 #' @return A data.frame or NULL if table doesn't exist
 #' @keywords internal
-read_table <- function(con, table_name, columns = NULL) {
+read_table <- function(con, tbl_nm, columns = NULL) {
 
-  if (!DBI::dbExistsTable(con, table_name)) {
-    warn(paste0("Table '", table_name, "' does not exist in the database. ",
+  if (!DBI::dbExistsTable(con, tbl_nm)) {
+    warn(paste0("Table '", tbl_nm, "' does not exist in the database. ",
                 "Skipping."))
     return(NULL)
   }
-  tbl_lazy <- dplyr::tbl(con, table_name)
+  tbl_lazy <- dplyr::tbl(con, tbl_nm)
   if (!is.null(columns)) {
     existing_cols <- colnames(tbl_lazy)
     cols_to_select <- intersect(columns, existing_cols)
@@ -83,15 +63,15 @@ read_table <- function(con, table_name, columns = NULL) {
 #' Count rows in a table lazily
 #'
 #' @param con A DBI connection
-#' @param table_name Character table name
+#' @param tbl_nm Character table name
 #' @return Integer row count, or 0 if table doesn't exist
 #' @keywords internal
-count_table_rows <- function(con, table_name) {
-  if (!DBI::dbExistsTable(con, table_name)) {
+count_table_rows <- function(con, tbl_nm) {
+  if (!DBI::dbExistsTable(con, tbl_nm)) {
     return(0L)
   }
   result <- DBI::dbGetQuery(con, paste0("SELECT COUNT(*) AS n FROM ",
-                                         DBI::dbQuoteIdentifier(con, table_name)))
+                                         DBI::dbQuoteIdentifier(con, tbl_nm)))
   as.integer(result$n[1])
 }
 
@@ -114,86 +94,80 @@ make_node_ids <- function(df, pk_cols) {
   }
 }
 
-#' Get objects from a bundle, handling both field naming conventions
-#'
-#' ontologySpecR uses `objects` and `links` (not objectTypes/linkTypes).
-#' We handle both forms for robustness.
+#' Get object types from a bundle
 #'
 #' @param bundle An ontologySpecR bundle
 #' @return List of object types
 #' @keywords internal
 get_bundle_objects <- function(bundle) {
-
-  objs <- bundle$objects
-  if (is.null(objs)) {
-    objs <- bundle$objectTypes  # fallback for alternative naming
-  }
-  objs %||% list()
+  ontologySpecR::bundle_object_types(bundle)
 }
 
-#' Get links from a bundle
+#' Get link types from a bundle
 #'
 #' @param bundle An ontologySpecR bundle
 #' @return List of link types
 #' @keywords internal
 get_bundle_links <- function(bundle) {
-  lnks <- bundle$links
-  if (is.null(lnks)) {
-    lnks <- bundle$linkTypes  # fallback for alternative naming
-  }
-  lnks %||% list()
+  ontologySpecR::bundle_link_types(bundle)
 }
 
 #' Find an object type by ID in a bundle
 #'
 #' @param bundle An ontologySpecR bundle
 #' @param id Character object type ID
-#' @return An ontologySpecR object_type or NULL
+#' @return An ontologySpecR object_type or NULL if the id is unknown
 #' @keywords internal
 find_object_type <- function(bundle, id) {
-  objs <- get_bundle_objects(bundle)
-  for (obj in objs) {
-    if (identical(obj$id, id)) return(obj)
-  }
-  NULL
+  tryCatch(ontologySpecR::bundle_object_type(bundle, id),
+           error = function(e) NULL)
 }
 
 #' Find a link type by ID in a bundle
 #'
 #' @param bundle An ontologySpecR bundle
 #' @param id Character link type ID
-#' @return An ontologySpecR link_type or NULL
+#' @return An ontologySpecR link_type or NULL if the id is unknown
 #' @keywords internal
 find_link_type <- function(bundle, id) {
-  lnks <- get_bundle_links(bundle)
-  for (lnk in lnks) {
+  for (lnk in get_bundle_links(bundle)) {
     if (identical(lnk$id, id)) return(lnk)
   }
   NULL
 }
 
+#' Coerce input to a bundle, warning on legacy spellings
+#'
+#' Single entry point used by every function that takes a bundle.
+#'
+#' @param bundle A bundle, or something `ontologySpecR::as_bundle()` accepts
+#' @return A validated ontologySpecR bundle
+#' @keywords internal
+as_vx_bundle <- function(bundle) {
+  ontologySpecR::as_bundle(bundle)
+}
 
 #' Read table with optional WHERE filter
 #'
 #' @param con A DBI connection
-#' @param table_name Character table name
+#' @param tbl_nm Character table name
 #' @param columns Character vector of columns to select, or NULL for all
 #' @param where Character WHERE clause (without WHERE keyword), or NULL
 #' @return A data.frame or NULL if table doesn't exist
 #' @keywords internal
-read_table_filtered <- function(con, table_name, columns = NULL, where = NULL) {
-  if (!DBI::dbExistsTable(con, table_name)) {
-    warn(paste0("Table '", table_name, "' does not exist in the database. ",
+read_table_filtered <- function(con, tbl_nm, columns = NULL, where = NULL) {
+  if (!DBI::dbExistsTable(con, tbl_nm)) {
+    warn(paste0("Table '", tbl_nm, "' does not exist in the database. ",
                 "Skipping."))
     return(NULL)
   }
 
   if (is.null(where)) {
-    return(read_table(con, table_name, columns))
+    return(read_table(con, tbl_nm, columns))
   }
 
   # Build SQL with WHERE clause
-  tbl_quoted <- DBI::dbQuoteIdentifier(con, table_name)
+  tbl_quoted <- DBI::dbQuoteIdentifier(con, tbl_nm)
   if (is.null(columns)) {
     cols_sql <- "*"
   } else {
@@ -204,7 +178,7 @@ read_table_filtered <- function(con, table_name, columns = NULL, where = NULL) {
   tryCatch(
     DBI::dbGetQuery(con, sql),
     error = function(e) {
-      warn(paste0("Query failed for table '", table_name, "': ",
+      warn(paste0("Query failed for table '", tbl_nm, "': ",
                   conditionMessage(e)))
       NULL
     }
@@ -215,15 +189,15 @@ read_table_filtered <- function(con, table_name, columns = NULL, where = NULL) {
 #' Count rows in a table with optional WHERE filter
 #'
 #' @param con A DBI connection
-#' @param table_name Character table name
+#' @param tbl_nm Character table name
 #' @param where Character WHERE clause (without WHERE keyword)
 #' @return Integer row count, or 0 if table doesn't exist or query fails
 #' @keywords internal
-count_table_rows_filtered <- function(con, table_name, where) {
-  if (!DBI::dbExistsTable(con, table_name)) {
+count_table_rows_filtered <- function(con, tbl_nm, where) {
+  if (!DBI::dbExistsTable(con, tbl_nm)) {
     return(0L)
   }
-  tbl_quoted <- DBI::dbQuoteIdentifier(con, table_name)
+  tbl_quoted <- DBI::dbQuoteIdentifier(con, tbl_nm)
   sql <- paste0("SELECT COUNT(*) AS n FROM ", tbl_quoted, " WHERE ", where)
   tryCatch({
     result <- DBI::dbGetQuery(con, sql)

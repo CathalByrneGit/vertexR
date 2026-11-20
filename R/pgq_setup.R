@@ -26,7 +26,8 @@ vx_pgq_available <- function(connection) {
 #' @return Character; the graph name.
 #' @export
 vx_pgq_graph_name <- function(bundle) {
- bundle_id <- bundle$bundleId %||% bundle$bundle_id %||% "graph"
+  bundle <- as_vx_bundle(bundle)
+  bundle_id <- bundle$bundleId %||% bundle$bundle_id %||% "graph"
   gsub("-", "_", bundle_id)
 }
 
@@ -67,6 +68,7 @@ vx_pgq_setup <- function(bundle, connection,
   DBI::dbExecute(connection, "LOAD duckpgq")
 
   # Determine graph name
+  bundle <- as_vx_bundle(bundle)
   gname <- graph_name %||% vx_pgq_graph_name(bundle)
 
   # Generate DDL from bundle
@@ -89,6 +91,7 @@ vx_pgq_setup <- function(bundle, connection,
 #' @return Character; the DDL statement.
 #' @keywords internal
 .build_pgq_ddl <- function(bundle, graph_name, vertex_tables, edge_tables) {
+  bundle <- as_vx_bundle(bundle)
   objects <- get_bundle_objects(bundle)
   links <- get_bundle_links(bundle)
 
@@ -114,8 +117,9 @@ vx_pgq_setup <- function(bundle, connection,
   # Build EDGE TABLE clauses
   edge_clauses <- character(0)
   for (lnk in links) {
-    from_obj <- find_object_type(bundle, lnk$from)
-    to_obj <- find_object_type(bundle, lnk$to)
+    ep <- ontologySpecR::link_endpoints(lnk)
+    from_obj <- find_object_type(bundle, ep$from)
+    to_obj <- find_object_type(bundle, ep$to)
     if (is.null(from_obj) || is.null(to_obj)) next
 
     join_info <- lnk$join

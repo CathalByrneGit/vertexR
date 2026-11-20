@@ -56,6 +56,8 @@ vertex_graph <- function(bundle, connection,
     abort("`connection` must be a DBI connection object.")
   }
 
+  bundle <- as_vx_bundle(bundle)
+
   # Get object and link type definitions from bundle
   all_objects <- get_bundle_objects(bundle)
   all_links   <- get_bundle_links(bundle)
@@ -76,7 +78,8 @@ vertex_graph <- function(bundle, connection,
   # Also filter links to only those whose from/to reference included objects
   included_obj_ids <- vapply(all_objects, function(o) o$id, character(1))
   all_links <- Filter(function(l) {
-    l$from %in% included_obj_ids && l$to %in% included_obj_ids
+    { ep <- ontologySpecR::link_endpoints(l)
+      ep$from %in% included_obj_ids && ep$to %in% included_obj_ids }
   }, all_links)
 
   # --- Check max_nodes guard (count lazily before loading) ---
@@ -154,8 +157,9 @@ vertex_graph <- function(bundle, connection,
     if (length(from_keys) == 0L || length(to_keys) == 0L) next
 
     # Find the source object types
-    from_obj <- find_object_type(bundle, lnk$from)
-    to_obj   <- find_object_type(bundle, lnk$to)
+    ep <- ontologySpecR::link_endpoints(lnk)
+    from_obj <- find_object_type(bundle, ep$from)
+    to_obj   <- find_object_type(bundle, ep$to)
     if (is.null(from_obj) || is.null(to_obj)) next
 
     from_table <- get_source_table(from_obj)

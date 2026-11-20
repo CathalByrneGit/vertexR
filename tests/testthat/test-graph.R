@@ -289,3 +289,50 @@ test_that("vertex_graph max_nodes can be disabled with Inf", {
   g <- vertex_graph(env$bundle, env$con, max_nodes = Inf)
   expect_s3_class(g, "tbl_graph")
 })
+
+
+test_that("legacy-spelled bundle still builds a graph via as_bundle()", {
+  skip_if_not_installed("duckdb")
+  skip_if_not_installed("ontologySpecR")
+
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbWriteTable(con, "airports", data.frame(airport_id = c("DUB", "JFK")))
+  DBI::dbWriteTable(con, "routes", data.frame(
+    route_id = "R1", origin_id = "DUB", stringsAsFactors = FALSE))
+
+  b <- ontologySpecR::bundle(
+    bundle_id = "legacy", bundle_version = "0.1.0",
+    objects = list(
+      ontologySpecR::object_type(
+        id = "Airport",
+        properties = list(ontologySpecR::property_def("airport_id", "string",
+                                                      nullable = FALSE)),
+        primary_key = "airport_id", source_kind = "table",
+        source_table = "airports"),
+      ontologySpecR::object_type(
+        id = "FlightRoute",
+        properties = list(
+          ontologySpecR::property_def("route_id", "string", nullable = FALSE),
+          ontologySpecR::property_def("origin_id", "string")),
+        primary_key = "route_id", source_kind = "table",
+        source_table = "routes")
+    ),
+    links = list(ontologySpecR::link_type(
+      id = "RouteOrigin", from = "FlightRoute", to = "Airport",
+      cardinality = "many-to-one", directed = TRUE,
+      join_from_keys = "origin_id", join_to_keys = "airport_id"))
+  )
+
+  # Re-spell as the legacy list layout (objectTypes/linkTypes)
+  legacy <- unclass(b)
+  legacy$objectTypes <- legacy$objects
+  legacy$linkTypes   <- legacy$links
+  legacy$objects <- NULL
+  legacy$links   <- NULL
+
+  expect_warning(g <- vertex_graph(legacy, con))
+  expect_s3_class(g, "tbl_graph")
+  expect_equal(nrow(vx_nodes(g)), 3L)
+  expect_equal(nrow(vx_edges(g)), 1L)
+})

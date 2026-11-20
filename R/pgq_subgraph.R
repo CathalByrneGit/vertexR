@@ -29,6 +29,7 @@ vx_pgq_subgraph <- function(connection, bundle, graph_name,
     abort("`connection` must be a DBI connection object.")
   }
 
+  bundle <- as_vx_bundle(bundle)
   objects <- get_bundle_objects(bundle)
   links <- get_bundle_links(bundle)
 
@@ -44,16 +45,17 @@ vx_pgq_subgraph <- function(connection, bundle, graph_name,
   for (ltype in link_types) {
     lnk <- find_link_type(bundle, ltype)
     if (is.null(lnk)) next
+    ep <- ontologySpecR::link_endpoints(lnk)
 
     # Try forward direction: seed_type -> target
-    if (seed_type == lnk$from) {
+    if (seed_type == ep$from) {
       tryCatch({
         nbrs <- vx_pgq_neighbors(
           connection, graph_name,
           source_type = seed_type,
           source_ids = seed_ids,
           link_type = ltype,
-          target_type = lnk$to,
+          target_type = ep$to,
           depth = depth,
           direction = "forward"
         )
@@ -64,14 +66,14 @@ vx_pgq_subgraph <- function(connection, bundle, graph_name,
     }
 
     # Try reverse direction: target -> seed_type
-    if (seed_type == lnk$to) {
+    if (seed_type == ep$to) {
       tryCatch({
         nbrs <- vx_pgq_neighbors(
           connection, graph_name,
           source_type = seed_type,
           source_ids = seed_ids,
           link_type = ltype,
-          target_type = lnk$from,
+          target_type = ep$from,
           depth = depth,
           direction = "reverse"
         )

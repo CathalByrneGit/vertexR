@@ -1,6 +1,6 @@
 Package: vertexR
 Title: Graph Exploration, Simulation, and Optimization for Ontology-Backed System Graphs
-Version: 0.1.0
+Version: 0.2.0
 Authors@R:
     person("Cathal", "Byrne", role = c("aut", "cre"),
            email = "cathal@example.com")
@@ -14,7 +14,7 @@ Description: Turns ontology specifications into interconnected system graphs
 License: MIT + file LICENSE
 Depends: R (>= 3.6)
 Imports:
-    ontologySpecR,
+    ontologySpecR (>= 0.2.0),
     DBI,
     igraph,
     tidygraph,
@@ -31,6 +31,9 @@ Suggests:
     knitr,
     rmarkdown
 SystemRequirements: DuckDB >= 1.0 with duckpgq community extension (optional, for vx_pgq_* functions)
+Remotes:
+    CathalByrneGit/ontologySpecR,
+    CathalByrneGit/actionTypesR
 Config/testthat/edition: 3
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
