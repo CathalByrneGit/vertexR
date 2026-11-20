@@ -23,56 +23,122 @@ get_pk_columns <- function(obj) {
   as.character(ontologySpecR::object_pk(obj))
 }
 
-#' Get source table name from an object type
+#' Is an object type backed by a SQL query rather than a table?
 #'
 #' @param obj An ontologySpecR object_type
-#' @return Character string table name
+#' @return Logical
 #' @keywords internal
-get_source_table <- function(obj) {
-  ontologySpecR::object_table(obj)
+is_query_object <- function(obj) {
+  identical(ontologySpecR::object_source(obj)$kind, "query")
 }
 
-#' Read selected columns from a table via DBI lazily
+#' Lazy table for an object type
 #'
-#' Uses dplyr::tbl() for lazy construction and only collects the requested
-#' columns to reduce memory usage for large tables.
+#' Query-backed types (`source$kind = "query"`) become a lazy `tbl` over the
+#' SQL expression; table-backed types use their source table.
 #'
 #' @param con A DBI connection
-#' @param tbl_nm Character table name
-#' @param columns Character vector of columns to select, or NULL for all
-#' @return A data.frame or NULL if table doesn't exist
+#' @param ot An ontologySpecR object_type
+#' @return A lazy `tbl`
 #' @keywords internal
-read_table <- function(con, tbl_nm, columns = NULL) {
+.object_tbl <- function(con, ot) {
+  if (is_query_object(ot)) {
+    dplyr::tbl(con, dplyr::sql(ontologySpecR::object_source_sql(ot)))
+  } else {
+    dplyr::tbl(con, ontologySpecR::object_table(ot))
+  }
+}
 
-  if (!DBI::dbExistsTable(con, tbl_nm)) {
-    warn(paste0("Table '", tbl_nm, "' does not exist in the database. ",
-                "Skipping."))
+#' Does the backing relation of an object type exist?
+#'
+#' Query-backed types are assumed to exist (the query is validated when run).
+#'
+#' @keywords internal
+.object_exists <- function(con, ot) {
+  is_query_object(ot) || DBI::dbExistsTable(con, ontologySpecR::object_table(ot))
+}
+
+#' Key under which `filter_sql` is looked up for an object type
+#'
+#' The object type id always works; table-backed types also accept their
+#' table name (the original convention).
+#'
+#' @keywords internal
+.filter_for <- function(filter_sql, ot) {
+  f <- filter_sql[[ot$id]]
+  if (is.null(f) && !is_query_object(ot)) {
+    f <- filter_sql[[ontologySpecR::object_table(ot)]]
+  }
+  f
+}
+
+#' Read (optionally filtered, column-selected) rows of an object type
+#'
+#' @param con A DBI connection
+#' @param ot An ontologySpecR object_type
+#' @param columns Character vector of columns, or NULL for all
+#' @param where Character WHERE clause (no `WHERE` keyword), or NULL
+#' @return A data.frame, or NULL if the backing table is missing or the
+#'   query fails
+#' @keywords internal
+read_object <- function(con, ot, columns = NULL, where = NULL) {
+  if (!.object_exists(con, ot)) {
+    warn(paste0("Table '", ontologySpecR::object_table(ot),
+                "' does not exist in the database. Skipping."))
     return(NULL)
   }
-  tbl_lazy <- dplyr::tbl(con, tbl_nm)
-  if (!is.null(columns)) {
-    existing_cols <- colnames(tbl_lazy)
-    cols_to_select <- intersect(columns, existing_cols)
-    if (length(cols_to_select) > 0L) {
-      tbl_lazy <- dplyr::select(tbl_lazy, dplyr::all_of(cols_to_select))
+  tryCatch({
+    x <- .object_tbl(con, ot)
+    if (!is.null(where)) x <- dplyr::filter(x, dplyr::sql(where))
+    if (!is.null(columns)) {
+      keep <- intersect(columns, colnames(x))
+      if (length(keep) > 0L) x <- dplyr::select(x, dplyr::all_of(keep))
     }
-  }
-  dplyr::collect(tbl_lazy)
+    as.data.frame(dplyr::collect(x), stringsAsFactors = FALSE)
+  }, error = function(e) {
+    warn(paste0("Query failed for object type '", ot$id, "': ",
+                conditionMessage(e)))
+    NULL
+  })
 }
 
-#' Count rows in a table lazily
+#' Count rows of an object type, optionally filtered
 #'
-#' @param con A DBI connection
-#' @param tbl_nm Character table name
-#' @return Integer row count, or 0 if table doesn't exist
+#' @inheritParams read_object
+#' @return Integer count (0 if missing or the query fails)
 #' @keywords internal
-count_table_rows <- function(con, tbl_nm) {
-  if (!DBI::dbExistsTable(con, tbl_nm)) {
-    return(0L)
+count_object <- function(con, ot, where = NULL) {
+  if (!.object_exists(con, ot)) return(0L)
+  tryCatch({
+    x <- .object_tbl(con, ot)
+    if (!is.null(where)) x <- dplyr::filter(x, dplyr::sql(where))
+    as.integer(dplyr::pull(dplyr::count(x), "n")[1])
+  }, error = function(e) 0L)
+}
+
+#' Join keys of a link type, or NULL if it has none
+#'
+#' @param lnk An ontologySpecR link_type
+#' @return `list(from =, to =)` of character vectors, or NULL
+#' @keywords internal
+.link_keys <- function(lnk) {
+  k <- tryCatch(ontologySpecR::link_join_keys(lnk), error = function(e) NULL)
+  if (is.null(k)) return(NULL)
+  from <- as.character(k$from)
+  to <- as.character(k$to)
+  if (length(from) == 0L || length(to) == 0L) return(NULL)
+  list(from = from, to = to)
+}
+
+#' Warn once about links skipped for lack of join keys
+#'
+#' @param ids Character vector of link ids
+#' @keywords internal
+.warn_no_join <- function(ids) {
+  if (length(ids) > 0L) {
+    warn(paste0("Skipping link type(s) with no join keys: ",
+                paste(ids, collapse = ", "), "."))
   }
-  result <- DBI::dbGetQuery(con, paste0("SELECT COUNT(*) AS n FROM ",
-                                         DBI::dbQuoteIdentifier(con, tbl_nm)))
-  as.integer(result$n[1])
 }
 
 #' Build a composite node ID from primary key columns
@@ -97,10 +163,11 @@ make_node_ids <- function(df, pk_cols) {
 #' Get object types from a bundle
 #'
 #' @param bundle An ontologySpecR bundle
-#' @return List of object types
+#' @return Unnamed list of object types (ontologySpecR names them by id;
+#'   internal code iterates by position and must not leak names into JSON)
 #' @keywords internal
 get_bundle_objects <- function(bundle) {
-  ontologySpecR::bundle_object_types(bundle)
+  unname(ontologySpecR::bundle_object_types(bundle))
 }
 
 #' Get link types from a bundle
@@ -109,7 +176,7 @@ get_bundle_objects <- function(bundle) {
 #' @return List of link types
 #' @keywords internal
 get_bundle_links <- function(bundle) {
-  ontologySpecR::bundle_link_types(bundle)
+  unname(ontologySpecR::bundle_link_types(bundle))
 }
 
 #' Find an object type by ID in a bundle
@@ -147,62 +214,3 @@ as_vx_bundle <- function(bundle) {
   ontologySpecR::as_bundle(bundle)
 }
 
-#' Read table with optional WHERE filter
-#'
-#' @param con A DBI connection
-#' @param tbl_nm Character table name
-#' @param columns Character vector of columns to select, or NULL for all
-#' @param where Character WHERE clause (without WHERE keyword), or NULL
-#' @return A data.frame or NULL if table doesn't exist
-#' @keywords internal
-read_table_filtered <- function(con, tbl_nm, columns = NULL, where = NULL) {
-  if (!DBI::dbExistsTable(con, tbl_nm)) {
-    warn(paste0("Table '", tbl_nm, "' does not exist in the database. ",
-                "Skipping."))
-    return(NULL)
-  }
-
-  if (is.null(where)) {
-    return(read_table(con, tbl_nm, columns))
-  }
-
-  # Build SQL with WHERE clause
-  tbl_quoted <- DBI::dbQuoteIdentifier(con, tbl_nm)
-  if (is.null(columns)) {
-    cols_sql <- "*"
-  } else {
-    cols_sql <- paste(DBI::dbQuoteIdentifier(con, columns), collapse = ", ")
-  }
-
-  sql <- paste0("SELECT ", cols_sql, " FROM ", tbl_quoted, " WHERE ", where)
-  tryCatch(
-    DBI::dbGetQuery(con, sql),
-    error = function(e) {
-      warn(paste0("Query failed for table '", tbl_nm, "': ",
-                  conditionMessage(e)))
-      NULL
-    }
-  )
-}
-
-
-#' Count rows in a table with optional WHERE filter
-#'
-#' @param con A DBI connection
-#' @param tbl_nm Character table name
-#' @param where Character WHERE clause (without WHERE keyword)
-#' @return Integer row count, or 0 if table doesn't exist or query fails
-#' @keywords internal
-count_table_rows_filtered <- function(con, tbl_nm, where) {
-  if (!DBI::dbExistsTable(con, tbl_nm)) {
-    return(0L)
-  }
-  tbl_quoted <- DBI::dbQuoteIdentifier(con, tbl_nm)
-  sql <- paste0("SELECT COUNT(*) AS n FROM ", tbl_quoted, " WHERE ", where)
-  tryCatch({
-    result <- DBI::dbGetQuery(con, sql)
-    as.integer(result$n[1])
-  }, error = function(e) {
-    0L
-  })
-}

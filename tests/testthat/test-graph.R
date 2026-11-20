@@ -341,3 +341,128 @@ test_that("legacy-spelled bundle still builds a graph via as_bundle()", {
   expect_equal(nrow(vx_nodes(g)), 3L)
   expect_equal(nrow(vx_edges(g)), 1L)
 })
+
+
+# Helpers for the query-backed / join-key / JSON tests ------------------------
+
+mini_bundle <- function(query_backed = FALSE, with_join = TRUE) {
+  airport <- if (query_backed) {
+    ontologySpecR::object_type(
+      id = "Airport",
+      properties = list(
+        ontologySpecR::property_def("airport_id", "string", nullable = FALSE),
+        ontologySpecR::property_def("country", "string")),
+      primary_key = "airport_id", source_kind = "query",
+      source_sql = "SELECT airport_id, country FROM airports_raw WHERE active"
+    )
+  } else {
+    ontologySpecR::object_type(
+      id = "Airport",
+      properties = list(
+        ontologySpecR::property_def("airport_id", "string", nullable = FALSE),
+        ontologySpecR::property_def("country", "string")),
+      primary_key = "airport_id", source_kind = "table",
+      source_table = "airports_raw"
+    )
+  }
+  ontologySpecR::bundle(
+    bundle_id = "mini", bundle_version = "0.1.0",
+    objects = list(
+      airport,
+      ontologySpecR::object_type(
+        id = "FlightRoute",
+        properties = list(
+          ontologySpecR::property_def("route_id", "string", nullable = FALSE),
+          ontologySpecR::property_def("origin_id", "string")),
+        primary_key = "route_id", source_kind = "table",
+        source_table = "routes")
+    ),
+    links = list(ontologySpecR::link_type(
+      id = "RouteOrigin", from = "FlightRoute", to = "Airport",
+      cardinality = "many-to-one", directed = TRUE,
+      join_from_keys = if (with_join) "origin_id",
+      join_to_keys = if (with_join) "airport_id"))
+  )
+}
+
+mini_con <- function() {
+  con <- DBI::dbConnect(duckdb::duckdb())
+  DBI::dbWriteTable(con, "airports_raw", data.frame(
+    airport_id = c("DUB", "JFK", "XXX"), country = c("IE", "US", "ZZ"),
+    active = c(TRUE, TRUE, FALSE), stringsAsFactors = FALSE))
+  DBI::dbWriteTable(con, "routes", data.frame(
+    route_id = c("R1", "R2"), origin_id = c("DUB", "XXX"),
+    stringsAsFactors = FALSE))
+  con
+}
+
+
+test_that("query-backed vertex type materialises through vertex_graph()", {
+  skip_if_not_installed("duckdb")
+  skip_if_not_installed("ontologySpecR")
+  con <- mini_con()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  g <- vertex_graph(mini_bundle(query_backed = TRUE), con)
+  nodes <- vx_nodes(g)
+
+  # The query filters out the inactive airport XXX
+  expect_setequal(nodes$.node_id[nodes$.object_type == "Airport"],
+                  c("DUB", "JFK"))
+  # R2 points at XXX, which is not a node, so only R1 -> DUB survives
+  expect_equal(nrow(vx_edges(g)), 1L)
+})
+
+
+test_that("filter_sql applies to query-backed types by object id", {
+  skip_if_not_installed("duckdb")
+  skip_if_not_installed("ontologySpecR")
+  con <- mini_con()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  g <- vertex_graph(mini_bundle(query_backed = TRUE), con,
+                    filter_sql = list(Airport = "country = 'IE'"))
+  expect_equal(vx_nodes(g)$.node_id[vx_nodes(g)$.object_type == "Airport"],
+               "DUB")
+})
+
+
+test_that("links with no join keys are skipped with one warning naming them", {
+  skip_if_not_installed("duckdb")
+  skip_if_not_installed("ontologySpecR")
+  con <- mini_con()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expect_warning(
+    g <- vertex_graph(mini_bundle(with_join = FALSE), con),
+    "RouteOrigin"
+  )
+  expect_equal(nrow(vx_edges(g)), 0L)
+})
+
+
+test_that("bundle accessors return unnamed lists", {
+  skip_if_not_installed("ontologySpecR")
+  b <- mini_bundle()
+  expect_null(names(get_bundle_objects(b)))
+  expect_null(names(get_bundle_links(b)))
+})
+
+
+test_that("node data serialises to a JSON array of objects", {
+  skip_if_not_installed("duckdb")
+  skip_if_not_installed("jsonlite")
+  skip_if_not_installed("ontologySpecR")
+  con <- mini_con()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  g <- vertex_graph(mini_bundle(), con)
+  json <- as.character(jsonlite::toJSON(vx_nodes(g), auto_unbox = TRUE))
+  parsed <- jsonlite::fromJSON(json, simplifyVector = FALSE)
+
+  expect_true(startsWith(json, "["))
+  expect_null(names(parsed))
+  expect_equal(length(parsed), nrow(vx_nodes(g)))
+  expect_true(all(vapply(parsed, function(n) ".node_id" %in% names(n),
+                         logical(1))))
+})

@@ -86,14 +86,8 @@ vertex_graph <- function(bundle, connection,
   if (is.finite(max_nodes)) {
     total_count <- 0L
     for (obj in all_objects) {
-      tbl_name <- get_source_table(obj)
-      # If filter_sql exists for this table, use filtered count
-      if (tbl_name %in% names(filter_sql)) {
-        total_count <- total_count +
-          count_table_rows_filtered(connection, tbl_name, filter_sql[[tbl_name]])
-      } else {
-        total_count <- total_count + count_table_rows(connection, tbl_name)
-      }
+      total_count <- total_count +
+        count_object(connection, obj, .filter_for(filter_sql, obj))
     }
     if (total_count > max_nodes) {
       warn(paste0(
@@ -108,20 +102,12 @@ vertex_graph <- function(bundle, connection,
   # --- Build node table ---
   node_frames <- list()
   for (obj in all_objects) {
-    tbl_name <- get_source_table(obj)
     pk_cols <- get_pk_columns(obj)
+    tbl_filter <- .filter_for(filter_sql, obj)
 
-    # Get filter for this table if any
-    tbl_filter <- filter_sql[[tbl_name]]
-
-    # Determine which columns to fetch (lazy column selection)
-    if (node_properties) {
-      df <- read_table_filtered(connection, tbl_name, columns = NULL,
-                                 where = tbl_filter)
-    } else {
-      df <- read_table_filtered(connection, tbl_name, columns = pk_cols,
-                                 where = tbl_filter)
-    }
+    df <- read_object(connection, obj,
+                      columns = if (node_properties) NULL else pk_cols,
+                      where = tbl_filter)
     if (is.null(df) || nrow(df) == 0L) next
 
     node_id <- make_node_ids(df, pk_cols)
@@ -148,22 +134,21 @@ vertex_graph <- function(bundle, connection,
 
   # --- Build edge table ---
   edge_frames <- list()
+  no_join <- character(0)
   for (lnk in all_links) {
-    join_info <- lnk$join
-    if (is.null(join_info)) next
-
-    from_keys <- as.character(join_info$fromKeys)
-    to_keys   <- as.character(join_info$toKeys)
-    if (length(from_keys) == 0L || length(to_keys) == 0L) next
+    keys <- .link_keys(lnk)
+    if (is.null(keys)) {
+      no_join <- c(no_join, lnk$id)
+      next
+    }
+    from_keys <- keys$from
+    to_keys   <- keys$to
 
     # Find the source object types
     ep <- ontologySpecR::link_endpoints(lnk)
     from_obj <- find_object_type(bundle, ep$from)
     to_obj   <- find_object_type(bundle, ep$to)
     if (is.null(from_obj) || is.null(to_obj)) next
-
-    from_table <- get_source_table(from_obj)
-    to_table   <- get_source_table(to_obj)
 
     from_pk <- get_pk_columns(from_obj)
     to_pk   <- get_pk_columns(to_obj)
@@ -172,8 +157,8 @@ vertex_graph <- function(bundle, connection,
     from_cols <- unique(c(from_pk, from_keys))
     to_cols   <- unique(c(to_pk, to_keys))
 
-    from_df <- read_table(connection, from_table, columns = from_cols)
-    to_df   <- read_table(connection, to_table, columns = to_cols)
+    from_df <- read_object(connection, from_obj, columns = from_cols)
+    to_df   <- read_object(connection, to_obj, columns = to_cols)
     if (is.null(from_df) || is.null(to_df)) next
 
     # For each row in the "from" table, the from_keys columns contain
@@ -233,6 +218,8 @@ vertex_graph <- function(bundle, connection,
       edge_frames[[length(edge_frames) + 1L]] <- edge_df
     }
   }
+
+  .warn_no_join(no_join)
 
   if (length(edge_frames) > 0L) {
     edges <- dplyr::bind_rows(edge_frames)

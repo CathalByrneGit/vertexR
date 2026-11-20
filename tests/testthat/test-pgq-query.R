@@ -241,3 +241,51 @@ test_that("vx_pgq_shortest_path returns NULL for disconnected nodes", {
   # Should be NULL since airlines aren't directly connected via RouteOperator
   expect_true(is.null(result) || nrow(result) == 0L)
 })
+
+
+test_that("vx_pgq_neighbors works on a target type with no name column", {
+  env <- setup_aviation_pgq()
+  on.exit(teardown_aviation_pgq(env))
+
+  # FlightRoute has no `name` column
+  result <- vx_pgq_neighbors(
+    env$con, env$graph_name,
+    source_type = "Airport", source_ids = "DUB",
+    link_type = "RouteOrigin", target_type = "FlightRoute",
+    direction = "reverse"
+  )
+  expect_true(all(c("source_id", "target_id") %in% names(result)))
+  expect_false("target_name" %in% names(result))
+  expect_false("target_label" %in% names(result))
+})
+
+
+test_that("vx_pgq_neighbors returns target_label only when requested", {
+  env <- setup_aviation_pgq()
+  on.exit(teardown_aviation_pgq(env))
+
+  result <- vx_pgq_neighbors(
+    env$con, env$graph_name,
+    source_type = "FlightRoute", source_ids = "R1",
+    link_type = "RouteOrigin", target_type = "Airport",
+    target_label = "name", bundle = env$bundle
+  )
+  expect_true("target_label" %in% names(result))
+
+  expect_error(
+    vx_pgq_neighbors(
+      env$con, env$graph_name,
+      source_type = "FlightRoute", source_ids = "R1",
+      link_type = "RouteOrigin", target_type = "Airport",
+      target_label = "nope", bundle = env$bundle
+    ),
+    "not a property"
+  )
+})
+
+
+test_that("vx_pgq_graph_exists sees the graph created by setup", {
+  env <- setup_aviation_pgq()
+  on.exit(teardown_aviation_pgq(env))
+  expect_true(vx_pgq_graph_exists(env$con, env$graph_name))
+})

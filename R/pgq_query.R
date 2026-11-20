@@ -67,14 +67,38 @@ vx_pgq_match <- function(connection, graph_name, pattern, columns,
 #' @param target_pk Character; PK column name on target type.
 #'   Default `"node_id"`.
 #'
-#' @return A data.frame with columns: `source_id`, `target_id`, `target_name`.
+#' @param target_label Character or NULL; a property of `target_type` to
+#'   return as `target_label`. Omitted when NULL (the default).
+#' @param bundle An ontologySpecR bundle or NULL. When supplied together
+#'   with `target_label`, the label is checked against the target type's
+#'   properties (`ontologySpecR::object_property_ids()`).
+#'
+#' @return A data.frame with columns `source_id`, `target_id` and, if
+#'   `target_label` is given, `target_label`.
+#'
+#' @details
+#' `path_length` is **not** returned: DuckPGQ only exposes `path_length()`
+#' for `ANY SHORTEST` path bindings, not for quantified `{m,n}` patterns,
+#' so there is no per-row hop count to report. Use [vx_pgq_shortest_path()]
+#' when hop counts matter. Callers should treat `path_length` as optional.
 #' @export
 vx_pgq_neighbors <- function(connection, graph_name,
                              source_type, source_ids, link_type, target_type,
                              depth = 1L,
                              direction = c("forward", "reverse", "both"),
-                             source_pk = "node_id", target_pk = "node_id") {
+                             source_pk = "node_id", target_pk = "node_id",
+                             target_label = NULL, bundle = NULL) {
   direction <- match.arg(direction)
+
+  if (!is.null(target_label)) {
+    if (!is.null(bundle)) {
+      ot <- ontologySpecR::bundle_object_type(as_vx_bundle(bundle), target_type)
+      if (!target_label %in% ontologySpecR::object_property_ids(ot)) {
+        abort(paste0("`target_label` '", target_label,
+                     "' is not a property of object type '", target_type, "'."))
+      }
+    }
+  }
 
   # Build depth quantifier
   depth_q <- if (length(depth) == 1L) {
@@ -99,10 +123,37 @@ vx_pgq_neighbors <- function(connection, graph_name,
     columns = c(
       paste0("s.", source_pk, " AS source_id"),
       paste0("t.", target_pk, " AS target_id"),
-      "t.name AS target_name"
+      if (!is.null(target_label)) paste0("t.", target_label, " AS target_label")
     ),
     where = paste0("s.", source_pk, " IN (", ids_sql, ")")
   )
+}
+
+
+#' Does a Property Graph Exist?
+#'
+#' Probes the graph with a trivial `MATCH`; any failure (graph missing,
+#' extension not loaded) gives `FALSE`. DuckPGQ has no stable catalog query
+#' to rely on, so this is a probe, not a catalog lookup.
+#'
+#' @param connection DBI connection with DuckPGQ loaded.
+#' @param graph_name Character; the property graph name.
+#' @return `TRUE` or `FALSE`.
+#' @export
+vx_pgq_graph_exists <- function(connection, graph_name) {
+  if (!inherits(connection, "DBIConnection")) {
+    abort("`connection` must be a DBI connection object.")
+  }
+  if (!is.character(graph_name) || length(graph_name) != 1L ||
+      !grepl("^[A-Za-z_][A-Za-z0-9_]*$", graph_name)) {
+    return(FALSE)
+  }
+  tryCatch({
+    DBI::dbGetQuery(connection, paste0(
+      "FROM GRAPH_TABLE (", graph_name, " MATCH (n) COLUMNS (n.node_id)) LIMIT 1"
+    ))
+    TRUE
+  }, error = function(e) FALSE)
 }
 
 

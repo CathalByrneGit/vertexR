@@ -174,3 +174,74 @@ test_that("vx_pgq_setup with subset of vertex/edge tables works", {
                  edge_tables = c("RouteOrigin"))
   )
 })
+
+
+test_that("composite primary keys abort in the PGQ DDL builder", {
+  skip_if_not_installed("ontologySpecR")
+  b <- ontologySpecR::bundle(
+    bundle_id = "composite", bundle_version = "0.1.0",
+    objects = list(ontologySpecR::object_type(
+      id = "Leg",
+      properties = list(
+        ontologySpecR::property_def("a", "string", nullable = FALSE),
+        ontologySpecR::property_def("b", "string", nullable = FALSE)),
+      primary_key = c("a", "b"), source_kind = "table",
+      source_table = "legs"))
+  )
+  expect_error(.build_pgq_ddl(b, "g", NULL, NULL), "composite primary key")
+})
+
+
+test_that("query-backed types get a view and use it in the DDL", {
+  skip_if_not_installed("ontologySpecR")
+  b <- ontologySpecR::bundle(
+    bundle_id = "q", bundle_version = "0.1.0",
+    objects = list(ontologySpecR::object_type(
+      id = "Airport",
+      properties = list(ontologySpecR::property_def("airport_id", "string",
+                                                    nullable = FALSE)),
+      primary_key = "airport_id", source_kind = "query",
+      source_sql = "SELECT airport_id FROM airports_raw"))
+  )
+  expect_equal(
+    unname(.pgq_view_sql(b, "g")),
+    "CREATE OR REPLACE VIEW g__Airport AS SELECT airport_id FROM airports_raw"
+  )
+  expect_match(.build_pgq_ddl(b, "g", NULL, NULL), "g__Airport PROPERTIES",
+               fixed = TRUE)
+})
+
+
+test_that("vx_pgq_setup works for a query-backed vertex type", {
+  skip_if_not_installed("duckdb")
+  skip_if_not_installed("ontologySpecR")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  skip_if_not(vx_pgq_available(con), "DuckPGQ not available")
+
+  DBI::dbWriteTable(con, "airports_raw", data.frame(
+    airport_id = c("DUB", "XXX"), active = c(TRUE, FALSE),
+    stringsAsFactors = FALSE))
+  b <- ontologySpecR::bundle(
+    bundle_id = "q", bundle_version = "0.1.0",
+    objects = list(ontologySpecR::object_type(
+      id = "Airport",
+      properties = list(ontologySpecR::property_def("airport_id", "string",
+                                                    nullable = FALSE)),
+      primary_key = "airport_id", source_kind = "query",
+      source_sql = "SELECT airport_id FROM airports_raw WHERE active"))
+  )
+  vx_pgq_setup(b, con, graph_name = "qg")
+  expect_true(vx_pgq_graph_exists(con, "qg"))
+  res <- vx_pgq_match(con, "qg", "(a:Airport)", "a.node_id AS id")
+  expect_equal(res$id, "DUB")
+})
+
+
+test_that("vx_pgq_graph_exists is FALSE for unknown graphs", {
+  skip_if_not_installed("duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  expect_false(vx_pgq_graph_exists(con, "no_such_graph"))
+  expect_false(vx_pgq_graph_exists(con, "bad name; drop"))
+})

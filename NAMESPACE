@@ -39,6 +39,7 @@ export(vx_color_by_concept)
 
 # DuckPGQ backend (large graphs)
 export(vx_pgq_available)
+export(vx_pgq_graph_exists)
 export(vx_pgq_setup)
 export(vx_pgq_graph_name)
 export(vx_pgq_match)

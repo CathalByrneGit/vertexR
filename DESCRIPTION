@@ -14,7 +14,7 @@ Description: Turns ontology specifications into interconnected system graphs
 License: MIT + file LICENSE
 Depends: R (>= 3.6)
 Imports:
-    ontologySpecR (>= 0.2.0),
+    ontologySpecR (>= 0.2.1),
     DBI,
     igraph,
     tidygraph,
@@ -28,6 +28,7 @@ Suggests:
     actionTypesR,
     conceptR,
     testthat (>= 3.0.0),
+    jsonlite,
     knitr,
     rmarkdown
 SystemRequirements: DuckDB >= 1.0 with duckpgq community extension (optional, for vx_pgq_* functions)

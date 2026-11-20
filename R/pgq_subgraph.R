@@ -87,12 +87,11 @@ vx_pgq_subgraph <- function(connection, bundle, graph_name,
   # Build filter_sql to only fetch these node IDs
   filter_sql <- list()
   for (obj in objects) {
-    tbl_name <- get_source_table(obj)
-    pk_col <- get_pk_columns(obj)[1]
+    pk_col <- .pgq_pk(obj)
 
     # Filter to only include node IDs in our subgraph
     ids_sql <- paste0("'", gsub("'", "''", all_node_ids), "'", collapse = ", ")
-    filter_sql[[tbl_name]] <- paste0(pk_col, " IN (", ids_sql, ")")
+    filter_sql[[obj$id]] <- paste0(pk_col, " IN (", ids_sql, ")")
   }
 
   # Use vertex_graph with filter_sql to materialize

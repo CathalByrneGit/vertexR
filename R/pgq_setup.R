@@ -46,6 +46,13 @@ vx_pgq_graph_name <- function(bundle) {
 #'   to include as vertex tables. NULL means all.
 #' @param edge_tables Character vector or NULL. Subset of link type IDs
 #'   to include as edge tables. NULL means all.
+#' @details
+#' Object types backed by a query (`source$kind = "query"`) are exposed to
+#' DuckPGQ through views named `<graph_name>__<type_id>`, created with
+#' `CREATE OR REPLACE VIEW` before the property graph. Setup therefore
+#' creates (or replaces) these views in the connected database.
+#'
+#' Composite primary keys are not supported by the PGQ backend and abort.
 #' @return The connection invisibly (for piping).
 #' @export
 vx_pgq_setup <- function(bundle, connection,
@@ -71,6 +78,12 @@ vx_pgq_setup <- function(bundle, connection,
   bundle <- as_vx_bundle(bundle)
   gname <- graph_name %||% vx_pgq_graph_name(bundle)
 
+  # Query-backed object types need a view: CREATE PROPERTY GRAPH only
+  # accepts tables and views.
+  for (view_sql in .pgq_view_sql(bundle, gname)) {
+    DBI::dbExecute(connection, view_sql)
+  }
+
   # Generate DDL from bundle
   ddl <- .build_pgq_ddl(bundle, gname, vertex_tables, edge_tables)
 
@@ -81,6 +94,44 @@ vx_pgq_setup <- function(bundle, connection,
   invisible(connection)
 }
 
+
+#' Relation name DuckPGQ should use for an object type
+#'
+#' The source table, or `<graph_name>__<id>` (a view) for query-backed types.
+#'
+#' @keywords internal
+.pgq_relation <- function(obj, graph_name) {
+  if (is_query_object(obj)) {
+    paste0(graph_name, "__", obj$id)
+  } else {
+    ontologySpecR::object_table(obj)
+  }
+}
+
+#' CREATE VIEW statements for query-backed object types
+#'
+#' @return Character vector (possibly empty) of SQL statements
+#' @keywords internal
+.pgq_view_sql <- function(bundle, graph_name) {
+  objs <- Filter(is_query_object, get_bundle_objects(as_vx_bundle(bundle)))
+  vapply(objs, function(o) {
+    paste0("CREATE OR REPLACE VIEW ", .pgq_relation(o, graph_name), " AS ",
+           ontologySpecR::object_source_sql(o))
+  }, character(1))
+}
+
+#' Primary key column for PGQ, aborting on composite keys
+#'
+#' @keywords internal
+.pgq_pk <- function(obj) {
+  pk <- get_pk_columns(obj)
+  if (length(pk) != 1L) {
+    abort(paste0("Object type '", obj$id, "' has a composite primary key (",
+                 paste(pk, collapse = ", "),
+                 "); the DuckPGQ backend supports single-column keys only."))
+  }
+  pk
+}
 
 #' Build DuckPGQ CREATE PROPERTY GRAPH DDL
 #'
@@ -107,32 +158,32 @@ vx_pgq_setup <- function(bundle, connection,
 
   # Build VERTEX TABLE clauses
   vertex_clauses <- vapply(objects, function(obj) {
-    tbl <- get_source_table(obj)
-    pk <- get_pk_columns(obj)
-    pk_col <- pk[1]  # Use first PK column
+    tbl <- .pgq_relation(obj, graph_name)
+    pk_col <- .pgq_pk(obj)
     label <- obj$id
     paste0("  ", tbl, " PROPERTIES (", pk_col, " AS node_id) LABEL ", label)
   }, character(1))
 
   # Build EDGE TABLE clauses
   edge_clauses <- character(0)
+  no_join <- character(0)
   for (lnk in links) {
     ep <- ontologySpecR::link_endpoints(lnk)
     from_obj <- find_object_type(bundle, ep$from)
     to_obj <- find_object_type(bundle, ep$to)
     if (is.null(from_obj) || is.null(to_obj)) next
 
-    join_info <- lnk$join
-    if (is.null(join_info)) next
+    keys <- .link_keys(lnk)
+    if (is.null(keys)) {
+      no_join <- c(no_join, lnk$id)
+      next
+    }
+    from_keys <- keys$from
 
-    from_keys <- as.character(join_info$fromKeys)
-    to_keys <- as.character(join_info$toKeys)
-    if (length(from_keys) == 0L || length(to_keys) == 0L) next
-
-    from_tbl <- get_source_table(from_obj)
-    to_tbl <- get_source_table(to_obj)
-    from_pk <- get_pk_columns(from_obj)[1]
-    to_pk <- get_pk_columns(to_obj)[1]
+    from_tbl <- .pgq_relation(from_obj, graph_name)
+    to_tbl <- .pgq_relation(to_obj, graph_name)
+    from_pk <- .pgq_pk(from_obj)
+    to_pk <- .pgq_pk(to_obj)
 
     # Edge comes FROM the "from" object type TO the "to" object type
     # The join keys in the "from" table reference the "to" table's PK
@@ -144,6 +195,8 @@ vx_pgq_setup <- function(bundle, connection,
     )
     edge_clauses <- c(edge_clauses, edge_clause)
   }
+
+  .warn_no_join(no_join)
 
   # Combine into CREATE PROPERTY GRAPH statement
   paste0(
