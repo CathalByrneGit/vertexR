@@ -331,7 +331,12 @@ test_that("legacy-spelled bundle still builds a graph via as_bundle()", {
   legacy$objects <- NULL
   legacy$links   <- NULL
 
-  expect_warning(g <- vertex_graph(legacy, con))
+  # ontologySpecR warns once per session per legacy key; reset so this is
+  # independent of test order.
+  warned <- ontologySpecR:::.legacy_warned
+  if (is.environment(warned)) rm(list = ls(warned), envir = warned)
+
+  expect_warning(g <- vertex_graph(legacy, con), "Legacy key")
   expect_s3_class(g, "tbl_graph")
   expect_equal(nrow(vx_nodes(g)), 3L)
   expect_equal(nrow(vx_edges(g)), 1L)

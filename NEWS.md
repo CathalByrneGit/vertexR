@@ -6,4 +6,5 @@
 * Internal helpers use `bundle_object_types()`, `bundle_link_types()`,
   `bundle_object_type()`, `link_endpoints()`, `object_table()` and
   `object_pk()` instead of reading bundle fields directly.
+* `vx_pgq_graph_name()` uses `bundle_id()`.
 * Requires ontologySpecR >= 0.2.0 (see `Remotes`).

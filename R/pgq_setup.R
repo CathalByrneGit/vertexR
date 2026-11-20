@@ -27,7 +27,7 @@ vx_pgq_available <- function(connection) {
 #' @export
 vx_pgq_graph_name <- function(bundle) {
   bundle <- as_vx_bundle(bundle)
-  bundle_id <- bundle$bundleId %||% bundle$bundle_id %||% "graph"
+  bundle_id <- ontologySpecR::bundle_id(bundle) %||% "graph"
   gsub("-", "_", bundle_id)
 }
 
