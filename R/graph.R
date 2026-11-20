@@ -6,6 +6,10 @@
 #' and all property columns from the source table, and each edge has
 #' `.link_type` plus the join key columns.
 #'
+#' For large graphs, use `filter_sql` to pre-filter tables before loading,
+#' or use the `vx_pgq_*` functions to query via DuckPGQ without loading
+#' the entire graph into memory.
+#'
 #' @param bundle An ontologySpecR bundle object.
 #' @param connection A DBI connection to the database containing instance data.
 #' @param object_types Character vector of object type IDs to include,
@@ -16,8 +20,12 @@
 #'   columns from the source table on each node. If `FALSE`, only include
 #'   `.object_type` and `.node_id`.
 #' @param max_nodes Integer; maximum total nodes allowed. If the total would
-#'   exceed this limit, an error is raised. Set to `Inf` to disable the guard.
-#'   Default is 50000.
+#'   exceed this limit, a warning is issued (but loading proceeds).
+#'   Set to `Inf` to disable the warning. Default is 50000.
+#' @param filter_sql Named list of per-table WHERE clauses to pre-filter
+#'   before materializing. Names should be table names, values should be
+#'   SQL WHERE predicates (without the WHERE keyword).
+#'   Example: `list(entities = "jurisdiction = 'British Virgin Islands'")`.
 #'
 #' @return A `tbl_graph` object.
 #' @export
@@ -30,17 +38,25 @@
 #' g <- vertex_graph(b, con)
 #' vx_nodes(g)
 #' vx_edges(g)
+#'
+#' # Pre-filter large tables
+#' g <- vertex_graph(b, con,
+#'   filter_sql = list(airports = "country = 'Ireland'")
+#' )
 #' }
 vertex_graph <- function(bundle, connection,
                          object_types = NULL,
                          link_types = NULL,
                          node_properties = TRUE,
-                         max_nodes = 50000L) {
+                         max_nodes = 50000L,
+                         filter_sql = list()) {
 
   # Validate inputs
   if (!inherits(connection, "DBIConnection")) {
     abort("`connection` must be a DBI connection object.")
   }
+
+  bundle <- as_vx_bundle(bundle)
 
   # Get object and link type definitions from bundle
   all_objects <- get_bundle_objects(bundle)
@@ -62,21 +78,23 @@ vertex_graph <- function(bundle, connection,
   # Also filter links to only those whose from/to reference included objects
   included_obj_ids <- vapply(all_objects, function(o) o$id, character(1))
   all_links <- Filter(function(l) {
-    l$from %in% included_obj_ids && l$to %in% included_obj_ids
+    { ep <- ontologySpecR::link_endpoints(l)
+      ep$from %in% included_obj_ids && ep$to %in% included_obj_ids }
   }, all_links)
 
   # --- Check max_nodes guard (count lazily before loading) ---
   if (is.finite(max_nodes)) {
     total_count <- 0L
     for (obj in all_objects) {
-      tbl_name <- get_source_table(obj)
-      total_count <- total_count + count_table_rows(connection, tbl_name)
+      total_count <- total_count +
+        count_object(connection, obj, .filter_for(filter_sql, obj))
     }
     if (total_count > max_nodes) {
-      abort(paste0(
+      warn(paste0(
         "Total node count (", total_count, ") exceeds max_nodes limit (",
-        max_nodes, "). Consider filtering object_types or using objectSetsR ",
-        "for large-scale queries. Set max_nodes = Inf to disable this guard."
+        max_nodes, "). Consider using filter_sql to pre-filter, or use ",
+        "vx_pgq_subgraph() for large-scale queries. ",
+        "Set max_nodes = Inf to disable this warning."
       ))
     }
   }
@@ -84,15 +102,12 @@ vertex_graph <- function(bundle, connection,
   # --- Build node table ---
   node_frames <- list()
   for (obj in all_objects) {
-    tbl_name <- get_source_table(obj)
     pk_cols <- get_pk_columns(obj)
+    tbl_filter <- .filter_for(filter_sql, obj)
 
-    # Determine which columns to fetch (lazy column selection)
-    if (node_properties) {
-      df <- read_table(connection, tbl_name, columns = NULL)
-    } else {
-      df <- read_table(connection, tbl_name, columns = pk_cols)
-    }
+    df <- read_object(connection, obj,
+                      columns = if (node_properties) NULL else pk_cols,
+                      where = tbl_filter)
     if (is.null(df) || nrow(df) == 0L) next
 
     node_id <- make_node_ids(df, pk_cols)
@@ -119,21 +134,21 @@ vertex_graph <- function(bundle, connection,
 
   # --- Build edge table ---
   edge_frames <- list()
+  no_join <- character(0)
   for (lnk in all_links) {
-    join_info <- lnk$join
-    if (is.null(join_info)) next
-
-    from_keys <- as.character(join_info$fromKeys)
-    to_keys   <- as.character(join_info$toKeys)
-    if (length(from_keys) == 0L || length(to_keys) == 0L) next
+    keys <- .link_keys(lnk)
+    if (is.null(keys)) {
+      no_join <- c(no_join, lnk$id)
+      next
+    }
+    from_keys <- keys$from
+    to_keys   <- keys$to
 
     # Find the source object types
-    from_obj <- find_object_type(bundle, lnk$from)
-    to_obj   <- find_object_type(bundle, lnk$to)
+    ep <- ontologySpecR::link_endpoints(lnk)
+    from_obj <- find_object_type(bundle, ep$from)
+    to_obj   <- find_object_type(bundle, ep$to)
     if (is.null(from_obj) || is.null(to_obj)) next
-
-    from_table <- get_source_table(from_obj)
-    to_table   <- get_source_table(to_obj)
 
     from_pk <- get_pk_columns(from_obj)
     to_pk   <- get_pk_columns(to_obj)
@@ -142,8 +157,8 @@ vertex_graph <- function(bundle, connection,
     from_cols <- unique(c(from_pk, from_keys))
     to_cols   <- unique(c(to_pk, to_keys))
 
-    from_df <- read_table(connection, from_table, columns = from_cols)
-    to_df   <- read_table(connection, to_table, columns = to_cols)
+    from_df <- read_object(connection, from_obj, columns = from_cols)
+    to_df   <- read_object(connection, to_obj, columns = to_cols)
     if (is.null(from_df) || is.null(to_df)) next
 
     # For each row in the "from" table, the from_keys columns contain
@@ -203,6 +218,8 @@ vertex_graph <- function(bundle, connection,
       edge_frames[[length(edge_frames) + 1L]] <- edge_df
     }
   }
+
+  .warn_no_join(no_join)
 
   if (length(edge_frames) > 0L) {
     edges <- dplyr::bind_rows(edge_frames)
