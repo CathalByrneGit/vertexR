@@ -71,6 +71,7 @@ vx_pgq_available(con)
 # Create property graph from bundle
 vx_pgq_setup(b, con)
 graph_name <- vx_pgq_graph_name(b)
+vx_pgq_graph_exists(con, graph_name)   # TRUE once set up
 
 # Query neighbors (executes in DuckDB, not R)
 vx_pgq_neighbors(con, graph_name,
@@ -78,8 +79,11 @@ vx_pgq_neighbors(con, graph_name,
   source_ids = c("DUB"),
   link_type = "RouteOrigin",
   target_type = "FlightRoute",
-  depth = 2
+  depth = 2,
+  direction = "reverse"   # routes point TO airports
 )
+# Optional: target_label = "name", bundle = b adds a `target_label` column.
+# path_length is not returned (DuckPGQ only has it for ANY SHORTEST).
 
 # Find shortest path
 vx_pgq_shortest_path(con, graph_name,
@@ -107,6 +111,11 @@ vx_pgq_pattern(con, graph_name, "multi_jurisdiction_officer",
 # List available patterns
 vx_pgq_list_patterns()
 ```
+
+Notes: query-backed object types (`source_kind = "query"`) are exposed to
+DuckPGQ through views named `<graph_name>__<type_id>`, which `vx_pgq_setup()`
+creates. The PGQ backend supports single-column primary keys only. `vertex_graph()`
+skips links without join keys, with one warning naming them.
 
 ### 3. Graph Analysis
 
@@ -196,8 +205,8 @@ vx_plot(g_with_concepts, color_by = "busy_airport")
 
 ## Dependencies
 
-- **Imports**: ontologySpecR, DBI, igraph, tidygraph, dplyr, rlang
-- **Suggests**: duckdb, visNetwork, ggraph, ggplot2, actionTypesR, conceptR,
+- **Imports**: ontologySpecR (>= 0.2.1), DBI, igraph, tidygraph, dplyr, rlang
+- **Suggests**: duckdb, jsonlite, visNetwork, ggraph, ggplot2, actionTypesR, conceptR,
   testthat, knitr, rmarkdown
 - **SystemRequirements**: DuckDB >= 1.0 with duckpgq extension (optional)
 
