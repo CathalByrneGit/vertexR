@@ -122,7 +122,18 @@ count_object <- function(con, ot, where = NULL) {
 #' @return `list(from =, to =)` of character vectors, or NULL
 #' @keywords internal
 .link_keys <- function(lnk) {
-  k <- tryCatch(ontologySpecR::link_join_keys(lnk), error = function(e) NULL)
+  # link_join_keys() stops on a missing join (-> skip, caller warns) and on
+  # mismatched key lengths (a real spec error, which must propagate).
+  k <- tryCatch(
+    ontologySpecR::link_join_keys(lnk),
+    error = function(e) {
+      if (grepl("missing join keys", conditionMessage(e), fixed = TRUE)) {
+        NULL
+      } else {
+        stop(e)
+      }
+    }
+  )
   if (is.null(k)) return(NULL)
   from <- as.character(k$from)
   to <- as.character(k$to)

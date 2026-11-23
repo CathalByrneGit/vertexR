@@ -466,3 +466,12 @@ test_that("node data serialises to a JSON array of objects", {
   expect_true(all(vapply(parsed, function(n) ".node_id" %in% names(n),
                          logical(1))))
 })
+
+
+test_that("mismatched join key lengths are an error, not a silent skip", {
+  skip_if_not_installed("ontologySpecR")
+  lnk <- ontologySpecR::link_type(
+    id = "Bad", from = "A", to = "B", cardinality = "many-to-one",
+    directed = TRUE, join_from_keys = c("x", "y"), join_to_keys = "z")
+  expect_error(.link_keys(lnk), "must match")
+})
