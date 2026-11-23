@@ -1,3 +1,12 @@
+# vertexR 0.2.1
+
+* Schema-qualified object types (`source$schema`) now work. Tables are read
+  with `dbplyr::in_schema()` and checked with `DBI::Id()`, and `vx_pgq_setup()`
+  qualifies the vertex and edge table names (`schema.table`) in
+  `CREATE PROPERTY GRAPH`. Requires ontologySpecR >= 0.2.2. The PGQ qualified
+  names have only been checked as generated DDL, not against a live DuckPGQ
+  install.
+
 # vertexR 0.2.0
 
 * Adds the DuckPGQ backend (`vx_pgq_*`), new in this release: `vx_pgq_available()`,

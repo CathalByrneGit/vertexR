@@ -97,14 +97,15 @@ vx_pgq_setup <- function(bundle, connection,
 
 #' Relation name DuckPGQ should use for an object type
 #'
-#' The source table, or `<graph_name>__<id>` (a view) for query-backed types.
+#' The source table (schema-qualified when the type has a schema), or `<graph_name>__<id>` (a view) for query-backed types.
 #'
 #' @keywords internal
 .pgq_relation <- function(obj, graph_name) {
   if (is_query_object(obj)) {
     paste0(graph_name, "__", obj$id)
   } else {
-    ontologySpecR::object_table(obj)
+    id <- ontologySpecR::object_table_id(obj)
+    if (is.null(id$schema)) id$table else paste0(id$schema, ".", id$table)
   }
 }
 

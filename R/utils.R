@@ -45,7 +45,9 @@ is_query_object <- function(obj) {
   if (is_query_object(ot)) {
     dplyr::tbl(con, dplyr::sql(ontologySpecR::object_source_sql(ot)))
   } else {
-    dplyr::tbl(con, ontologySpecR::object_table(ot))
+    id <- ontologySpecR::object_table_id(ot)
+    dplyr::tbl(con, if (is.null(id$schema)) id$table
+                    else dbplyr::in_schema(id$schema, id$table))
   }
 }
 
@@ -55,7 +57,10 @@ is_query_object <- function(obj) {
 #'
 #' @keywords internal
 .object_exists <- function(con, ot) {
-  is_query_object(ot) || DBI::dbExistsTable(con, ontologySpecR::object_table(ot))
+  if (is_query_object(ot)) return(TRUE)
+  id <- ontologySpecR::object_table_id(ot)
+  DBI::dbExistsTable(con, if (is.null(id$schema)) id$table
+                          else DBI::Id(schema = id$schema, table = id$table))
 }
 
 #' Key under which `filter_sql` is looked up for an object type

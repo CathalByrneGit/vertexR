@@ -1,6 +1,6 @@
 Package: vertexR
 Title: Graph Exploration, Simulation, and Optimization for Ontology-Backed System Graphs
-Version: 0.2.0
+Version: 0.2.1
 Authors@R:
     person("Cathal", "Byrne", role = c("aut", "cre"),
            email = "cathal@example.com")
@@ -14,11 +14,12 @@ Description: Turns ontology specifications into interconnected system graphs
 License: MIT + file LICENSE
 Depends: R (>= 3.6)
 Imports:
-    ontologySpecR (>= 0.2.1),
+    ontologySpecR (>= 0.2.2),
     DBI,
     igraph,
     tidygraph,
     dplyr,
+    dbplyr,
     rlang
 Suggests:
     duckdb,
